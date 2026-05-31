@@ -107,7 +107,7 @@ if watchlist:
 
     if kline_code:
         code = kline_code.split(" ")[0]
-        hist = get_stock_history(code, period=period_map[period], days=120)
+        hist = get_stock_history(code, days=120)
         if not hist.empty:
             # 计算均线
             hist["ma5"] = calc_ma(hist["close"], 5)
