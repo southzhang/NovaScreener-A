@@ -160,59 +160,52 @@ def get_realtime_quotes_batch(codes: list[str]) -> list[dict]:
     return results
 
 
-# ===== 股票列表（新浪源）=====
+# ===== 股票列表（腾讯行情源）=====
+
+# 常用股票池（可扩展）
+_STOCK_POOL = [
+    # 沪市主板
+    '600519', '601318', '600036', '601166', '600276', '600887', '601888', '600900',
+    '601398', '601939', '600028', '601088', '600050', '601857', '600585', '601601',
+    '600016', '601328', '601668', '600031', '601288', '600000', '600104', '600309',
+    # 深市主板
+    '000001', '000002', '000858', '000333', '000568', '000651', '000725', '000063',
+    '002415', '002594', '002714', '002304', '000538', '000661', '002352', '000002',
+    # 创业板
+    '300750', '300059', '300015', '300122', '300760', '300124', '300033', '300274',
+    # 科创板
+    '688981', '688111', '688036', '688009', '688012', '688005', '688003', '688002',
+]
+
 
 def get_stock_list() -> pd.DataFrame:
-    """获取A股列表"""
+    """获取股票列表（腾讯行情API）"""
     cache_key = "stock_list"
     cached = _get_cached(cache_key)
     if cached is not None and isinstance(cached, pd.DataFrame):
         return cached
 
     stocks = []
+    
+    # 用腾讯行情API批量获取
+    for code in _STOCK_POOL:
+        quote = get_realtime_quote(code)
+        if quote:
+            stocks.append({
+                "code": code,
+                "name": quote["name"],
+                "price": quote["price"],
+                "pct_change": quote["pct_change"],
+                "turnover": quote["turnover"],
+                "volume": quote["volume"],
+                "amount": quote["amount"],
+            })
 
-    def _fetch_node(node, prefixes):
-        node_stocks = []
-        for prefix in prefixes:
-            for page in range(1, 50):
-                try:
-                    url = f"http://vip.stock.finance.sina.com.cn/quotes_service/api_json_v2.php/Market_Center.getHQNodeData?page={page}&num=80&sort=symbol&asc=1&node={node}&symbol=&_s_r_a=page"
-                    resp = requests.get(url, timeout=10)
-                    if resp.status_code == 200 and resp.text.strip():
-                        data = json.loads(resp.text)
-                        for item in data:
-                            symbol = item.get("symbol", "")
-                            if symbol.startswith(prefix):
-                                name = item.get("name", "")
-                                if "ST" not in name and "退市" not in name:
-                                    price = float(item.get("trade", 0))
-                                    if price > 0:
-                                        node_stocks.append({
-                                            "code": symbol[2:],
-                                            "name": name,
-                                            "price": price,
-                                            "pct_change": float(item.get("changepercent", 0)),
-                                            "turnover": float(item.get("turnoverratio", 0)),
-                                        })
-                        if len(data) < 80:
-                            break
-                except Exception:
-                    break
-        return node_stocks
-
-    try:
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            f_sh = ex.submit(_fetch_node, "sh_a", ["sh6"])
-            f_sz = ex.submit(_fetch_node, "sz_a", ["sz0", "sz3"])
-            stocks = f_sh.result() + f_sz.result()
-
-        if stocks:
-            df = pd.DataFrame(stocks)
-            _set_cache(cache_key, df)
-            return df.copy()
-    except Exception as e:
-        print(f"[数据] 股票列表失败: {e}")
-
+    if stocks:
+        df = pd.DataFrame(stocks)
+        _set_cache(cache_key, df)
+        return df.copy()
+    
     return pd.DataFrame()
 
 
