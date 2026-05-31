@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from core.db import add_watchlist, remove_watchlist, get_watchlist, get_watchlist_groups
 from core.data import get_stock_list, get_stock_history
-from core.strategies import calc_ma, calc_macd
+from core.strategies import ema_fast, calc_ma
 
 st.set_page_config(page_title="自选股", page_icon="⭐", layout="wide")
 st.title("⭐ 自选股管理")

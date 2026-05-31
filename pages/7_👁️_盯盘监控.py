@@ -3,8 +3,8 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from core.monitor import get_monitor, start_monitoring, stop_monitoring
-from core.data import get_realtime_quote, get_watchlist
-from core.db import get_watchlist as db_get_watchlist, get_alerts
+from core.data import get_realtime_quote
+from core.db import get_watchlist as db_get_watchlist
 from core.alerts import send_feishu_card
 
 st.set_page_config(page_title="盯盘监控", page_icon="👁️", layout="wide")

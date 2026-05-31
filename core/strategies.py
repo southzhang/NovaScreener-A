@@ -62,6 +62,34 @@ def barslast_fast(cond):
     return result
 
 
+def calc_rsi(close, period=14):
+    """RSI指标"""
+    delta = np.diff(close, prepend=close[0])
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+    avg_gain = ema_fast(gain, period)
+    avg_loss = ema_fast(loss, period)
+    rs = np.divide(avg_gain, avg_loss, out=np.ones_like(avg_gain), where=avg_loss != 0)
+    return 100 - (100 / (1 + rs))
+
+
+def calc_bollinger(close, window=20, num_std=2.0):
+    """布林带"""
+    middle = calc_ma(close, window)
+    std = np.std(close[-window:], ddof=0)
+    upper = middle[-1] + num_std * std
+    lower = middle[-1] - num_std * std
+    return upper, middle[-1], lower
+
+
+def calc_macd(close, fast=12, slow=26, signal=9):
+    """MACD指标"""
+    dif = ema_fast(close, fast) - ema_fast(close, slow)
+    dea = ema_fast(dif, signal)
+    macd_bar = 2 * (dif - dea)
+    return dif, dea, macd_bar
+
+
 def crossover(a, b):
     """a上穿b"""
     if len(a) < 2 or len(b) < 2:
@@ -82,7 +110,11 @@ def calc_ma(close, window):
     result = np.empty(n, dtype=float)
     result[:window-1] = np.nan
     cumsum = np.cumsum(close)
-    result[window-1:] = (cumsum[window-1:] - np.concatenate([[0], cumsum[:-window]])[window-1:]) / window
+    # result[i] = (cumsum[i] - cumsum[i-window]) / window for i >= window
+    # result[window-1] = cumsum[window-1] / window
+    result[window-1] = cumsum[window-1] / window
+    if n > window:
+        result[window:] = (cumsum[window:] - cumsum[:n-window]) / window
     return result
 
 

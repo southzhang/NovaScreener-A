@@ -69,7 +69,7 @@ st.subheader("📈 策略回测预览")
 st.info("💡 选择一只股票，查看策略信号在历史数据上的表现")
 
 from core.data import get_stock_history
-from core.strategies import calc_ma, calc_macd, calc_rsi, calc_bollinger
+from core.strategies import ema_fast, calc_ma, calc_rsi, calc_bollinger
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
