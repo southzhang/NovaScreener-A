@@ -1,0 +1,32 @@
+# 量化盯盘选股 - 配置文件
+
+# 扫描设置
+scanner:
+  max_workers: 8          # 并发线程数
+  cache_ttl: 300          # 数据缓存秒数
+  scan_interval: 300      # 自动扫描间隔（秒）
+
+# 默认策略参数
+strategies:
+  ma_cross:
+    short: 5
+    long: 20
+  macd_cross: {}
+  volume_breakout:
+    vol_window: 20
+    vol_ratio: 2.0
+  rsi_oversold:
+    period: 14
+    threshold: 30
+  bollinger_breakout:
+    window: 20
+    num_std: 2.0
+  kdj_golden: {}
+
+# 预警设置
+alerts:
+  enabled: true
+  # 自选股异动阈值
+  watchlist_pct_threshold: 5.0  # 涨跌幅超此值触发
+  # 信号汇总模式: "instant"(每条即时推送) / "batch"(扫描完汇总推送)
+  mode: batch
