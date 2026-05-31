@@ -1,79 +1,107 @@
-"""选股策略引擎 — V10 通达信全买入公式 + 经典策略"""
+"""V10 完整策略引擎 — 七条件共振 + 波段回调 + 评分系统"""
 import numpy as np
 from dataclasses import dataclass
-from .v10_core import ema_fast, hhv_fast, llv_fast, barslast_fast, crossover, calc_ma
+from typing import Optional
 
+
+# ===== V10 核心指标函数 =====
+
+def ema_fast(series, period):
+    """快速EMA"""
+    alpha = 2.0 / (period + 1)
+    result = np.empty_like(series, dtype=float)
+    result[0] = series[0]
+    for i in range(1, len(series)):
+        result[i] = series[i] * alpha + result[i-1] * (1 - alpha)
+    return result
+
+
+def hhv_fast(series, period):
+    """滑动窗口最高值 O(n)"""
+    from collections import deque
+    n = len(series)
+    result = np.empty(n, dtype=float)
+    dq = deque()
+    for i in range(n):
+        while dq and dq[0] < i - period + 1:
+            dq.popleft()
+        while dq and series[dq[-1]] <= series[i]:
+            dq.pop()
+        dq.append(i)
+        result[i] = series[dq[0]]
+    return result
+
+
+def llv_fast(series, period):
+    """滑动窗口最低值 O(n)"""
+    from collections import deque
+    n = len(series)
+    result = np.empty(n, dtype=float)
+    dq = deque()
+    for i in range(n):
+        while dq and dq[0] < i - period + 1:
+            dq.popleft()
+        while dq and series[dq[-1]] >= series[i]:
+            dq.pop()
+        dq.append(i)
+        result[i] = series[dq[0]]
+    return result
+
+
+def barslast_fast(cond):
+    """条件回溯"""
+    n = len(cond)
+    result = np.full(n, 999.0, dtype=float)
+    last_true = -999
+    for i in range(n):
+        if cond[i]:
+            result[i] = 0
+            last_true = i
+        else:
+            result[i] = i - last_true if last_true >= 0 else 999
+    return result
+
+
+def crossover(a, b):
+    """a上穿b"""
+    if len(a) < 2 or len(b) < 2:
+        return False
+    return bool(a[-1] > b[-1] and a[-2] <= b[-2])
+
+
+def crossunder(a, b):
+    """a下穿b"""
+    if len(a) < 2 or len(b) < 2:
+        return False
+    return bool(a[-1] < b[-1] and a[-2] >= b[-2])
+
+
+def calc_ma(close, window):
+    """简单移动平均"""
+    n = len(close)
+    result = np.empty(n, dtype=float)
+    result[:window-1] = np.nan
+    cumsum = np.cumsum(close)
+    result[window-1:] = (cumsum[window-1:] - np.concatenate([[0], cumsum[:-window]])[window-1:]) / window
+    return result
+
+
+# ===== V10 七条件共振策略 =====
 
 @dataclass
-class StrategyResult:
-    """策略扫描结果"""
+class V10Signal:
+    """V10信号结果"""
     code: str
     name: str
-    strategy: str
+    signal_type: str  # 全买入/强庄买/基础买
     price: float
-    detail: str
-    triggered: bool = True
-    info: dict = None  # 附加指标数据
+    score: float
+    detail: dict
+    tags: list
 
 
-# ===== V10 参数 =====
-参数_放量 = 1.5
-参数_强庄 = 3
-参数_通道宽度 = 0.008
-
-
-def calc_macd_v10(close, fast=20, slow=80, signal=9):
-    """V10 MACD(20,80,9) — 非标准参数，过滤噪音"""
-    dif = ema_fast(close, fast) - ema_fast(close, slow)
-    dea = ema_fast(dif, signal)
-    macd_bar = 2 * (dif - dea)
-    return dif, dea, macd_bar
-
-
-def calc_rsi(close, period=14):
-    """RSI"""
-    delta = np.diff(close, prepend=close[0])
-    gain = np.where(delta > 0, delta, 0.0)
-    loss = np.where(delta < 0, -delta, 0.0)
-    avg_gain = ema_fast(gain, period)
-    avg_loss = ema_fast(loss, period)
-    rs = np.divide(avg_gain, avg_loss, out=np.ones_like(avg_gain), where=avg_loss != 0)
-    return 100 - (100 / (1 + rs))
-
-
-def calc_kdj(high, low, close, n=9, m1=3, m2=3):
-    """KDJ"""
-    lowest = llv_fast(low, n)
-    highest = hhv_fast(high, n)
-    diff = highest - lowest
-    rsv = np.where(diff > 0, (close - lowest) / diff * 100, 50.0)
-    k = ema_fast(rsv, m1)
-    d = ema_fast(k, m2)
-    j = 3 * k - 2 * d
-    return k, d, j
-
-
-def calc_bollinger(close, window=20, num_std=2.0):
-    """布林带"""
-    middle = calc_ma(close, window)
-    n = len(close)
-    std = np.empty(n, dtype=float)
-    std[:window-1] = np.nan
-    for i in range(window-1, n):
-        std[i] = np.std(close[i-window+1:i+1], ddof=0)
-    return middle + num_std * std, middle, middle - num_std * std
-
-
-# =====================================================
-#  V10 主策略：通达信全买入公式
-# =====================================================
-
-def scan_v10_full(close, high, low, volume, open_price) -> tuple[list[str], dict] | None:
-    """V10 全买入公式扫描
-    
-    返回: (signals_list, info_dict) 或 None
-    signals: ["全买入"] / ["强庄买"] / ["基础买"] / []
-    """
+def scan_v10_full(close, high, low, volume, open_price) -> Optional[V10Signal]:
+    """V10全买入公式 - 七条件共振"""
     n = len(close)
     if n < 200:
         return None
@@ -86,10 +114,11 @@ def scan_v10_full(close, high, low, volume, open_price) -> tuple[list[str], dict
     MA5 = ema_fast(close, 5)
     MA20 = ema_fast(close, 20)
 
-    # MACD(20,80,9)
-    DIF, DEA, _ = calc_macd_v10(close)
+    # MACD(20,80,9) - 非标准参数
+    DIF = ema_fast(close, 20) - ema_fast(close, 80)
+    DEA = ema_fast(DIF, 9)
 
-    # QW 动能（通达信 SMA 方式）
+    # QW动能（通达信SMA方式）
     lowest9 = llv_fast(low, 9)
     highest9 = hhv_fast(high, 9)
     diff9 = highest9 - lowest9
@@ -117,53 +146,199 @@ def scan_v10_full(close, high, low, volume, open_price) -> tuple[list[str], dict
     STRONG = (VAR1_ABS >= VAR1_HH20 * 0.9999) & (VAR1 > 0)
     barslast_STRONG = barslast_fast(STRONG)
 
-    # ===== 信号判断 =====
+    # 信号判断
     i = n - 1
 
+    # 条件1: 隧道多头
     隧道多头 = close[i] > 隧道快[i] and close[i] > 隧道慢[i] and 隧道快[i] > 隧道慢[i]
+
+    # 条件2: 双线定式
     双线定式 = MA5[i] > MA20[i] and MA5[i] > MA5[i-1]
+
+    # 条件3: QW上升
     QW上升 = QW[i] > QW[i-1]
-    宽度OK = 通道间距[i] > 参数_通道宽度
+
+    # 条件4: 通道间距>0.8%
+    宽度OK = 通道间距[i] > 0.008
+
+    # 条件5: 阳线
     阳线 = close[i] > open_price[i]
-    放量 = volume[i] > 参数_放量 * VOL_MA5[i] if VOL_MA5[i] > 0 else False
+
+    # 条件6: 放量（>1.5倍5日均量）
+    放量 = volume[i] > 1.5 * VOL_MA5[i] if VOL_MA5[i] > 0 else False
+
+    # 条件7: MACD金叉
     MACD金叉 = DIF[i] > DEA[i] and DIF[i-1] <= DEA[i-1]
 
-    ST_FIRST = STRONG[i] and barslast_STRONG[i-1] >= 参数_强庄
+    # 强庄信号
+    ST_FIRST = STRONG[i] and barslast_STRONG[i-1] >= 3
     强庄信号 = 放量 and 阳线 and ST_FIRST
 
+    # 信号组合
     基础买 = 隧道多头 and 双线定式 and QW上升 and 宽度OK and 阳线 and 放量
     全买入 = 基础买 and 强庄信号 and MACD金叉
     强庄买 = 基础买 and 强庄信号
 
-    signals = []
+    # 计算评分
+    score = 0
+    tags = []
+
     if 全买入:
-        signals.append("全买入")
+        signal_type = "全买入"
+        score = 100
+        tags = ["🏆全买入", "隧道✅", "MACD✅", "强庄✅", "放量✅"]
     elif 强庄买:
-        signals.append("强庄买")
+        signal_type = "强庄买"
+        score = 80
+        tags = ["🟠强庄买", "隧道✅", "强庄✅", "放量✅"]
     elif 基础买:
-        signals.append("基础买")
+        signal_type = "基础买"
+        score = 60
+        tags = ["🟡基础买", "隧道✅", "放量✅"]
+    else:
+        return None
 
-    info = {
-        '通道间距': round(通道间距[i], 4),
-        'VAR1': round(VAR1[i], 2),
-        'HH20': round(VAR1_HH20[i], 2),
-        'QW': round(QW[i], 1),
-        'MACD_DIF': round(DIF[i], 2),
-        'MACD_DEA': round(DEA[i], 2),
-        '隧道多头': 隧道多头,
-        '双线定式': 双线定式,
-        'QW上升': QW上升,
-        '放量': 放量,
-        '阳线': 阳线,
-        'MACD金叉': MACD金叉,
-        '强庄信号': 强庄信号,
+    # 附加评分
+    if MACD金叉:
+        score += 5
+    if 通道间距[i] > 0.02:
+        score += 5
+        tags.append(f"通道{通道间距[i]:.3f}")
+
+    detail = {
+        "隧道多头": 隧道多头,
+        "双线定式": 双线定式,
+        "QW上升": QW上升,
+        "通道间距": round(通道间距[i], 4),
+        "放量": 放量,
+        "阳线": 阳线,
+        "MACD金叉": MACD金叉,
+        "强庄信号": 强庄信号,
+        "QW值": round(QW[i], 1),
+        "VAR1": round(VAR1[i], 2),
     }
-    return signals, info
+
+    return V10Signal(
+        code="", name="",
+        signal_type=signal_type,
+        price=round(close[i], 2),
+        score=score,
+        detail=detail,
+        tags=tags,
+    )
 
 
-# =====================================================
-#  经典策略（简化版，快速筛选）
-# =====================================================
+# ===== 波段回调策略 =====
+
+@dataclass
+class PullbackSignal:
+    """波段回调信号"""
+    code: str
+    name: str
+    score: float
+    level: str  # 优质/一般/不推荐
+    price: float
+    detail: dict
+    tags: list
+
+
+def scan_pullback(close, high, low, volume) -> Optional[PullbackSignal]:
+    """波段回调入场识别"""
+    n = len(close)
+    if n < 50:
+        return None
+
+    # EMA均线
+    ema20 = ema_fast(close, 20)
+    ema50 = ema_fast(close, 50)
+    ema120 = ema_fast(close, 120)
+
+    # RSI
+    delta = np.diff(close, prepend=close[0])
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+    avg_gain = ema_fast(gain, 14)
+    avg_loss = ema_fast(loss, 14)
+    rs = np.divide(avg_gain, avg_loss, out=np.ones_like(avg_gain), where=avg_loss != 0)
+    rsi = 100 - (100 / (1 + rs))
+
+    # MACD
+    dif = ema_fast(close, 12) - ema_fast(close, 26)
+    dea = ema_fast(dif, 9)
+
+    # 评分
+    score = 0
+    tags = []
+
+    # 1. 多头排列 (0-2分)
+    if ema20[-1] > ema50[-1] > ema120[-1]:
+        score += 2
+        tags.append("多头排列✅")
+    elif ema20[-1] > ema50[-1]:
+        score += 1
+        tags.append("短多头")
+
+    # 2. 回调到支撑区 (0-2分)
+    dist_ema20 = (close[-1] - ema20[-1]) / ema20[-1]
+    dist_ema50 = (close[-1] - ema50[-1]) / ema50[-1]
+
+    if -0.02 <= dist_ema20 <= 0.02:
+        score += 2
+        tags.append("接近EMA20✅")
+    elif -0.05 <= dist_ema50 <= 0.02:
+        score += 1
+        tags.append("接近EMA50")
+
+    # 3. 缩量回调 (0-2分)
+    if len(volume) >= 20:
+        vol_ma20 = np.mean(volume[-20:])
+        vol_recent = np.mean(volume[-3:])
+        if vol_ma20 > 0:
+            vol_ratio = vol_recent / vol_ma20
+            if vol_ratio < 0.8:
+                score += 2
+                tags.append("缩量回调✅")
+            elif vol_ratio < 1.0:
+                score += 1
+                tags.append("量能收缩")
+
+    # 4. 动量未死 (0-2分)
+    if rsi[-1] > 40:
+        score += 1
+        tags.append(f"RSI={rsi[-1]:.0f}")
+    if dif[-1] > dea[-1]:
+        score += 1
+        tags.append("MACD多头")
+
+    # 推荐等级
+    if score >= 6:
+        level = "⭐ 优质入场"
+    elif score >= 4:
+        level = "🟡 观察等待"
+    else:
+        level = "🔴 暂不推荐"
+
+    detail = {
+        "ema20": round(ema20[-1], 2),
+        "ema50": round(ema50[-1], 2),
+        "ema120": round(ema120[-1], 2),
+        "dist_ema20": round(dist_ema20 * 100, 2),
+        "rsi": round(rsi[-1], 1),
+        "macd_dif": round(dif[-1], 2),
+        "macd_dea": round(dea[-1], 2),
+    }
+
+    return PullbackSignal(
+        code="", name="",
+        score=score,
+        level=level,
+        price=round(close[-1], 2),
+        detail=detail,
+        tags=tags,
+    )
+
+
+# ===== 经典策略 =====
 
 def strategy_ma_cross(close, high, low, volume, open_price, params) -> bool:
     """均线金叉"""
@@ -194,27 +369,42 @@ def strategy_volume_breakout(close, high, low, volume, open_price, params) -> bo
 
 def strategy_rsi_oversold(close, high, low, volume, open_price, params) -> bool:
     """RSI超卖反弹"""
-    rsi = calc_rsi(close, params.get("period", 14))
+    delta = np.diff(close, prepend=close[0])
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+    avg_gain = ema_fast(gain, 14)
+    avg_loss = ema_fast(loss, 14)
+    rs = np.divide(avg_gain, avg_loss, out=np.ones_like(avg_gain), where=avg_loss != 0)
+    rsi = 100 - (100 / (1 + rs))
     t = params.get("threshold", 30)
     return bool(rsi[-1] > t and rsi[-2] <= t)
 
 
 def strategy_bollinger_breakout(close, high, low, volume, open_price, params) -> bool:
     """布林带突破"""
-    upper, _, _ = calc_bollinger(close, params.get("window", 20), params.get("num_std", 2.0))
-    return crossover(close, upper)
+    window = params.get("window", 20)
+    num_std = params.get("num_std", 2.0)
+    middle = calc_ma(close, window)
+    std = np.std(close[-window:], ddof=0)
+    upper = middle[-1] + num_std * std
+    return bool(close[-1] > upper and close[-2] <= middle[-2] + num_std * np.std(close[-window-1:-1], ddof=0))
 
 
 def strategy_kdj_golden(close, high, low, volume, open_price, params) -> bool:
     """KDJ金叉"""
     if len(close) < 12:
         return False
-    k, d, _ = calc_kdj(high, low, close)
-    return crossover(k, d)
+    lowest = llv_fast(low, 9)
+    highest = hhv_fast(high, 9)
+    diff = highest - lowest
+    rsv = np.where(diff > 0, (close - lowest) / diff * 100, 50.0)
+    K = ema_fast(rsv, 3)
+    D = ema_fast(K, 3)
+    return crossover(K, D)
 
 
 def strategy_volume_price_up(close, high, low, volume, open_price, params) -> bool:
-    """量价齐升：连续3天"""
+    """量价齐升"""
     if len(close) < 4:
         return False
     return bool(close[-1] > close[-2] > close[-3] and volume[-1] > volume[-2] > volume[-3])
@@ -223,15 +413,20 @@ def strategy_volume_price_up(close, high, low, volume, open_price, params) -> bo
 # ===== 策略注册表 =====
 
 STRATEGY_REGISTRY = {
-    # --- V10 主策略 ---
     "v10_full": {
         "name": "V10 全买入",
-        "func": None,  # 特殊处理，用 scan_v10_full
+        "func": None,
         "default_params": {},
-        "desc": "通达信全买入公式：隧道多头+通道+QW动能+强庄控盘+MACD金叉+放量阳线",
+        "desc": "通达信全买入公式：隧道+通道+QW+强庄+MACD+放量阳线",
         "is_v10": True,
     },
-    # --- 经典策略 ---
+    "pullback": {
+        "name": "波段回调",
+        "func": None,
+        "default_params": {},
+        "desc": "EMA20/50/120回调入场",
+        "is_v10": True,
+    },
     "ma_cross": {
         "name": "均线金叉",
         "func": strategy_ma_cross,

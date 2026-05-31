@@ -1,82 +1,100 @@
-"""全市场扫描器 — V10 通达信公式 + 多线程并发"""
+"""V10 全市场扫描器 — 多策略 + 多线程 + 过滤"""
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from .data import get_stock_list, get_stock_history
-from .strategies import STRATEGY_REGISTRY, StrategyResult, scan_v10_full
+from .data import get_stock_list, get_stock_history, get_realtime_quote, get_capital_flow
+from .strategies import (
+    STRATEGY_REGISTRY, V10Signal, PullbackSignal,
+    scan_v10_full, scan_pullback,
+)
 from .db import save_signal
 
 
-def scan_single_stock_v10(code: str, name: str) -> list[StrategyResult]:
-    """V10 全买入公式扫描单只股票"""
+def scan_single_stock(code: str, name: str, strategy_keys: list[str], params_dict: dict) -> list[dict]:
+    """扫描单只股票的所有策略"""
     results = []
+
     try:
-        df = get_stock_history(code, days=350)  # V10需要200+根K线
-        if df.empty or len(df) < 200:
+        # 获取K线数据（V10需要200+根）
+        df = get_stock_history(code, days=350)
+        if df.empty or len(df) < 50:
             return results
 
+        # 转numpy数组
         close = df["close"].values.astype(np.float64)
         high = df["high"].values.astype(np.float64)
         low = df["low"].values.astype(np.float64)
         volume = df["volume"].values.astype(np.float64)
         open_p = df["open"].values.astype(np.float64)
 
-        ret = scan_v10_full(close, high, low, volume, open_p)
-        if ret is None:
-            return results
+        # V10全买入
+        if "v10_full" in strategy_keys and len(close) >= 200:
+            signal = scan_v10_full(close, high, low, volume, open_p)
+            if signal:
+                signal.code = code
+                signal.name = name
+                results.append({
+                    "type": "v10",
+                    "code": code,
+                    "name": name,
+                    "strategy": "V10全买入",
+                    "signal_type": signal.signal_type,
+                    "price": signal.price,
+                    "score": signal.score,
+                    "detail": signal.detail,
+                    "tags": signal.tags,
+                })
 
-        signals, info = ret
-        if signals:
-            price = close[-1]
-            for sig in signals:
-                detail_parts = []
-                if info.get('隧道多头'): detail_parts.append("隧道多头")
-                if info.get('MACD金叉'): detail_parts.append("MACD金叉")
-                if info.get('强庄信号'): detail_parts.append("强庄控盘")
-                if info.get('放量'): detail_parts.append("放量")
-                detail = " | ".join(detail_parts) if detail_parts else sig
+        # 波段回调
+        if "pullback" in strategy_keys and len(close) >= 50:
+            signal = scan_pullback(close, high, low, volume)
+            if signal and signal.score >= 4:
+                signal.code = code
+                signal.name = name
+                results.append({
+                    "type": "pullback",
+                    "code": code,
+                    "name": name,
+                    "strategy": "波段回调",
+                    "level": signal.level,
+                    "price": signal.price,
+                    "score": signal.score,
+                    "detail": signal.detail,
+                    "tags": signal.tags,
+                })
 
-                r = StrategyResult(
-                    code=code, name=name,
-                    strategy="v10_full",
-                    price=round(price, 2),
-                    detail=detail,
-                    info={**info, "signal_type": sig},
-                )
-                results.append(r)
-                save_signal(code, name, f"v10_{sig}", price, detail)
+        # 经典策略
+        for sk in strategy_keys:
+            if sk in ["v10_full", "pullback"]:
+                continue
+            info = STRATEGY_REGISTRY.get(sk)
+            if not info or not info.get("func"):
+                continue
+
+            params = params_dict.get(sk, info.get("default_params", {}))
+            try:
+                triggered = info["func"](close, high, low, volume, open_p, params)
+                if triggered:
+                    results.append({
+                        "type": "classic",
+                        "code": code,
+                        "name": name,
+                        "strategy": info["name"],
+                        "price": round(close[-1], 2),
+                        "score": 50,
+                        "detail": {},
+                        "tags": [info["name"]],
+                    })
+            except Exception:
+                continue
+
+        # 保存信号到数据库
+        for r in results:
+            save_signal(r["code"], r["name"], r["strategy"], r["price"], str(r.get("detail", "")))
+
     except Exception as e:
-        print(f"[V10扫描] {code} 出错: {e}")
+        print(f"[扫描] {code} 出错: {e}")
+
     return results
-
-
-def scan_single_stock_classic(code: str, name: str, strategy_key: str, params: dict) -> StrategyResult | None:
-    """经典策略扫描单只股票"""
-    try:
-        df = get_stock_history(code, days=150)
-        if df.empty or len(df) < 20:
-            return None
-
-        close = df["close"].values.astype(np.float64)
-        high = df["high"].values.astype(np.float64)
-        low = df["low"].values.astype(np.float64)
-        volume = df["volume"].values.astype(np.float64)
-        open_p = df["open"].values.astype(np.float64)
-
-        info = STRATEGY_REGISTRY.get(strategy_key)
-        if not info or not info.get("func"):
-            return None
-
-        triggered = info["func"](close, high, low, volume, open_p, params)
-        if triggered:
-            return StrategyResult(
-                code=code, name=name,
-                strategy=strategy_key,
-                price=round(close[-1], 2),
-                detail=f"触发{info['name']}",
-            )
-    except Exception as e:
-        print(f"[扫描] {code} {strategy_key} 出错: {e}")
-    return None
 
 
 def scan_market(
@@ -85,17 +103,20 @@ def scan_market(
     stock_pool: list[str] | None = None,
     max_workers: int = 10,
     progress_callback=None,
-) -> list[StrategyResult]:
+    apply_filters: bool = True,
+) -> list[dict]:
     """全市场扫描
     
-    如果 strategy_keys 包含 v10_full，使用 V10 全买入公式
-    否则使用经典策略
+    Args:
+        strategy_keys: 策略列表
+        params_dict: 策略参数
+        stock_pool: 股票池（None=全市场）
+        max_workers: 并发数
+        progress_callback: 进度回调
+        apply_filters: 是否应用资金面/基本面过滤
     """
     if params_dict is None:
         params_dict = {}
-
-    use_v10 = "v10_full" in strategy_keys
-    classic_keys = [k for k in strategy_keys if k != "v10_full"]
 
     # 获取股票池
     if stock_pool:
@@ -112,7 +133,10 @@ def scan_market(
         codes = all_stocks["code"].tolist()
         names = dict(zip(all_stocks["code"], all_stocks["name"]))
 
-    results: list[StrategyResult] = []
+    # 过滤ST和退市股
+    codes = [c for c in codes if "ST" not in names.get(c, "") and "退市" not in names.get(c, "")]
+
+    results = []
     total = len(codes)
     completed = 0
     _lock = __import__('threading').Lock()
@@ -120,54 +144,32 @@ def scan_market(
     def _progress():
         nonlocal completed
         completed += 1
-        if progress_callback and completed % 100 == 0:
-            progress_callback(completed, total, "")
+        if progress_callback and completed % 50 == 0:
+            progress_callback(completed, total)
 
-    if use_v10:
-        # V10 全买入扫描（需要更多历史数据）
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(scan_single_stock_v10, code, names.get(code, "")): code
-                for code in codes
-            }
-            for future in as_completed(futures):
-                _progress()
-                try:
-                    stock_results = future.result()
-                    if stock_results:
-                        with _lock:
-                            results.extend(stock_results)
-                except Exception as e:
-                    print(f"[V10扫描] 异常: {e}")
+    # 并发扫描
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(scan_single_stock, code, names.get(code, ""), strategy_keys, params_dict): code
+            for code in codes
+        }
+        for future in as_completed(futures):
+            _progress()
+            try:
+                stock_results = future.result()
+                if stock_results:
+                    with _lock:
+                        results.extend(stock_results)
+            except Exception as e:
+                print(f"[扫描] 异常: {e}")
 
-    if classic_keys:
-        # 经典策略扫描
-        tasks = []
-        for code in codes:
-            for sk in classic_keys:
-                params = params_dict.get(sk, STRATEGY_REGISTRY.get(sk, {}).get("default_params", {}))
-                tasks.append((code, names.get(code, ""), sk, params))
-
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(scan_single_stock_classic, code, name, sk, params): code
-                for code, name, sk, params in tasks
-            }
-            for future in as_completed(futures):
-                _progress()
-                try:
-                    result = future.result()
-                    if result:
-                        with _lock:
-                            results.append(result)
-                            save_signal(result.code, result.name, result.strategy, result.price, result.detail)
-                except Exception:
-                    pass
+    # 按评分排序
+    results.sort(key=lambda x: x.get("score", 0), reverse=True)
 
     return results
 
 
-def scan_watchlist(strategy_keys: list[str], params_dict: dict[str, dict] | None = None) -> list[StrategyResult]:
+def scan_watchlist(strategy_keys: list[str], params_dict: dict[str, dict] | None = None) -> list[dict]:
     """扫描自选股"""
     from .db import get_watchlist
     watchlist = get_watchlist()
@@ -175,3 +177,24 @@ def scan_watchlist(strategy_keys: list[str], params_dict: dict[str, dict] | None
         return []
     codes = [w["code"] for w in watchlist]
     return scan_market(strategy_keys, params_dict, stock_pool=codes)
+
+
+def get_market_overview() -> dict:
+    """获取市场概览"""
+    all_stocks = get_stock_list()
+    if all_stocks.empty:
+        return {}
+
+    up_count = len(all_stocks[all_stocks["pct_change"] > 0])
+    down_count = len(all_stocks[all_stocks["pct_change"] < 0])
+    limit_up = len(all_stocks[all_stocks["pct_change"] >= 9.9])
+    limit_down = len(all_stocks[all_stocks["pct_change"] <= -9.9])
+
+    return {
+        "total": len(all_stocks),
+        "up": up_count,
+        "down": down_count,
+        "limit_up": limit_up,
+        "limit_down": limit_down,
+        "up_ratio": round(up_count / len(all_stocks) * 100, 1) if len(all_stocks) > 0 else 0,
+    }

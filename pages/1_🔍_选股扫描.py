@@ -1,4 +1,4 @@
-"""选股扫描页面 — V10 全买入公式 + 经典策略"""
+"""选股扫描页面 — V10 + 经典策略 + 波段回调"""
 import streamlit as st
 import pandas as pd
 from core.strategies import STRATEGY_REGISTRY, get_strategy_names
@@ -8,33 +8,41 @@ from core.db import get_signals
 
 st.set_page_config(page_title="选股扫描", page_icon="🔍", layout="wide")
 st.title("🔍 选股扫描")
+st.caption("V10全买入 · 波段回调 · 经典策略")
 
-# ===== V10 策略（重点突出）=====
-st.subheader("🏆 V10 通达信全买入公式")
-with st.expander("V10 策略详解", expanded=False):
+# ===== V10 策略 =====
+st.subheader("🏆 V10 策略引擎")
+
+with st.expander("📖 V10 策略详解", expanded=False):
     st.markdown("""
-    **V10 全买入** = 隧道趋势 + 短线通道 + QW动能 + 强庄控盘 + MACD金叉 + 放量阳线
-    
-    所有条件同时满足才触发，信号质量极高：
+    **V10 全买入公式** — 七条件共振，宁缺毋滥：
     
     | 条件 | 说明 |
     |------|------|
-    | 隧道多头 | 收盘价 > EMA(120) > EMA(200)，长期趋势向上 |
-    | 双线定式 | EMA(5) > EMA(20) 且 EMA(5) 上升 |
-    | QW动能 | 自定义动量指标上升 |
-    | 通道间距 | (EMA5-EMA20)/EMA20 > 0.8%，趋势有力度 |
-    | 放量 | 成交量 > 1.5倍5日均量 |
-    | 阳线 | 收盘 > 开盘 |
-    | 强庄控盘 | 加权价格EMA突变，庄家动作 |
-    | MACD金叉 | DIF(20,80) 上穿 DEA(9) |
+    | 🏔️ 隧道多头 | 收盘价 > EMA(120) > EMA(200) |
+    | 📈 双线定式 | EMA(5) > EMA(20) 且上升 |
+    | ⚡ QW动能 | 自定义动量指标上升 |
+    | 📏 通道间距 | (EMA5-EMA20)/EMA20 > 0.8% |
+    | 🔊 放量 | 成交量 > 1.5x 5日均量 |
+    | 🔴 阳线 | 收盘 > 开盘 |
+    | 💪 强庄控盘 | 加权价格突变检测 |
+    | 📊 MACD金叉 | DIF(20,80) 上穿 DEA(9) |
+    
+    **信号分级：**
+    - 🔴 **全买入** = 所有条件满足（最强）
+    - 🟠 **强庄买** = 缺MACD金叉
+    - 🟡 **基础买** = 缺强庄信号
     """)
 
-v10_enabled = st.checkbox("🏆 启用 V10 全买入公式", value=True)
+col1, col2 = st.columns(2)
+with col1:
+    v10_enabled = st.checkbox("🏆 V10 全买入公式", value=True)
+with col2:
+    pullback_enabled = st.checkbox("🔄 波段回调入场", value=False)
 
 # ===== 经典策略 =====
 st.subheader("📋 经典策略")
-strategy_names = get_strategy_names()
-classic_names = [k for k in strategy_names if k != "v10_full"]
+classic_names = [k for k in get_strategy_names() if k not in ["v10_full", "pullback"]]
 
 selected_classic = []
 cols = st.columns(3)
@@ -60,26 +68,29 @@ for key in selected_classic:
                     params[pkey] = st.number_input(pkey, value=pval, step=0.1, format="%.2f", key=f"param_{key}_{pkey}")
             params_dict[key] = params
 
-# 合并策略列表
+# 合并策略
 all_selected = []
 if v10_enabled:
     all_selected.append("v10_full")
+if pullback_enabled:
+    all_selected.append("pullback")
 all_selected.extend(selected_classic)
 
 # 扫描范围
 st.subheader("🎯 扫描范围")
 scan_mode = st.radio("扫描范围", ["全市场", "自选股"], horizontal=True)
+max_workers = st.slider("并发线程数", 5, 20, 10)
 
 # 运行扫描
 if st.button("🚀 开始扫描", type="primary", use_container_width=True):
     if not all_selected:
         st.warning("请至少选择一个策略！")
     else:
-        with st.spinner("正在扫描中...全市场V10扫描约需3-8分钟"):
+        with st.spinner("正在扫描中...V10全市场扫描约需3-8分钟"):
             progress_bar = st.progress(0)
             status_text = st.empty()
 
-            def on_progress(current, total, code):
+            def on_progress(current, total):
                 pct = min(current / total, 1.0) if total > 0 else 0
                 progress_bar.progress(pct)
                 status_text.text(f"扫描进度: {current}/{total} ({pct*100:.0f}%)")
@@ -87,7 +98,7 @@ if st.button("🚀 开始扫描", type="primary", use_container_width=True):
             if scan_mode == "自选股":
                 results = scan_watchlist(all_selected, params_dict)
             else:
-                results = scan_market(all_selected, params_dict, progress_callback=on_progress)
+                results = scan_market(all_selected, params_dict, max_workers=max_workers, progress_callback=on_progress)
 
             progress_bar.progress(1.0)
             status_text.text("扫描完成！")
@@ -95,72 +106,66 @@ if st.button("🚀 开始扫描", type="primary", use_container_width=True):
         if results:
             st.success(f"🎯 找到 {len(results)} 个信号！")
 
-            # V10 信号分类展示
-            v10_results = [r for r in results if r.strategy == "v10_full"]
-            classic_results = [r for r in results if r.strategy != "v10_full"]
+            # V10 信号
+            v10_results = [r for r in results if r.get("type") == "v10"]
+            pullback_results = [r for r in results if r.get("type") == "pullback"]
+            classic_results = [r for r in results if r.get("type") == "classic"]
 
             if v10_results:
                 st.subheader("🏆 V10 全买入信号")
-                # 按信号类型排序
-                def v10_sort(r):
-                    sig_type = (r.info or {}).get("signal_type", "")
-                    if sig_type == "全买入": return 0
-                    elif sig_type == "强庄买": return 1
-                    else: return 2
-                v10_results.sort(key=v10_sort)
-
                 for r in v10_results:
-                    sig_type = (r.info or {}).get("signal_type", "")
-                    if sig_type == "全买入":
+                    signal_type = r.get("signal_type", "")
+                    if signal_type == "全买入":
                         emoji = "🔴"
-                    elif sig_type == "强庄买":
+                    elif signal_type == "强庄买":
                         emoji = "🟠"
                     else:
                         emoji = "🟡"
                     
-                    info = r.info or {}
                     cols = st.columns([1, 2, 1, 1, 2])
                     with cols[0]:
-                        st.markdown(f"**{emoji} {r.code}**")
+                        st.markdown(f"**{emoji} {r['code']}**")
                     with cols[1]:
-                        st.markdown(f"**{r.name}** — ¥{r.price}")
+                        st.markdown(f"**{r['name']}** — ¥{r['price']}")
                     with cols[2]:
-                        st.markdown(f"`{sig_type}`")
+                        st.markdown(f"`{signal_type}`")
                     with cols[3]:
-                        st.markdown(f"通道 {info.get('通道间距', '-')}")
+                        st.markdown(f"**{r['score']}分**")
                     with cols[4]:
-                        tags = []
-                        if info.get('MACD金叉'): tags.append("MACD✅")
-                        if info.get('强庄信号'): tags.append("强庄✅")
-                        if info.get('放量'): tags.append("放量✅")
-                        st.markdown(" ".join(tags))
+                        st.markdown(" ".join(r['tags'][:4]))
+
+            if pullback_results:
+                st.subheader("🔄 波段回调机会")
+                for r in pullback_results:
+                    cols = st.columns([1, 2, 1, 1, 2])
+                    with cols[0]:
+                        st.markdown(f"**{r['code']}**")
+                    with cols[1]:
+                        st.markdown(f"**{r['name']}** — ¥{r['price']}")
+                    with cols[2]:
+                        st.markdown(f"`{r.get('level', '')}`")
+                    with cols[3]:
+                        st.markdown(f"**{r['score']}分**")
+                    with cols[4]:
+                        st.markdown(" ".join(r['tags'][:4]))
 
             if classic_results:
                 st.subheader("📋 经典策略信号")
-                data = []
-                for r in classic_results:
-                    info = STRATEGY_REGISTRY.get(r.strategy, {})
-                    data.append({
-                        "代码": r.code, "名称": r.name,
-                        "策略": info.get("name", r.strategy),
-                        "价格": f"¥{r.price:.2f}", "详情": r.detail,
-                    })
-                st.dataframe(pd.DataFrame(data), use_container_width=True, hide_index=True)
+                df = pd.DataFrame(classic_results)
+                st.dataframe(df[["code", "name", "strategy", "price"]], use_container_width=True, hide_index=True)
 
-            # 发送飞书通知
+            # 发送飞书
             if st.button("📤 发送到飞书"):
                 signal_dicts = []
                 for r in results:
-                    info = STRATEGY_REGISTRY.get(r.strategy, {})
                     signal_dicts.append({
-                        "code": r.code, "name": r.name,
-                        "strategy": info.get("name", r.strategy),
-                        "price": r.price,
+                        "code": r["code"], "name": r["name"],
+                        "strategy": r["strategy"], "price": r["price"],
                     })
                 if send_batch_signals(signal_dicts):
                     st.success("已发送到飞书！")
                 else:
-                    st.warning("发送失败，请检查 Webhook 配置")
+                    st.warning("发送失败，请检查Webhook配置")
         else:
             st.info("未找到符合条件的股票")
 

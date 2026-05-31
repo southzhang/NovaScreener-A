@@ -1,17 +1,23 @@
-"""量化盯盘选股 V10 — Streamlit 主入口"""
+"""量化盯盘选股 V10 — 完整版 Streamlit 主入口"""
 import streamlit as st
 import pandas as pd
+import numpy as np
+from datetime import datetime
 from dotenv import load_dotenv
-from core.db import init_db, get_signals, get_watchlist
-from core.data import get_stock_list, get_top_gainers, get_top_losers
-from core.strategies import STRATEGY_REGISTRY
+from core.db import init_db, get_signals, get_watchlist, add_watchlist, remove_watchlist
+from core.data import get_stock_list, get_top_gainers, get_top_losers, get_realtime_quote, get_stock_history
+from core.strategies import STRATEGY_REGISTRY, get_strategy_names
+from core.scanner import scan_market, scan_watchlist, get_market_overview
+from core.scorer import score_stock, score_batch
+from core.monitor import get_monitor, start_monitoring, stop_monitoring
+from core.alerts import send_feishu_card, send_batch_signals
 
 # 初始化
 load_dotenv()
 init_db()
 
 st.set_page_config(
-    page_title="量化盯盘选股 V10",
+    page_title="V10 量化盯盘选股",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -20,81 +26,121 @@ st.set_page_config(
 # ===== 自定义样式 =====
 st.markdown("""
 <style>
-    .metric-card {
+    .v10-header {
         background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
         border-radius: 12px;
         padding: 20px;
         color: white;
-        text-align: center;
+        margin-bottom: 20px;
     }
-    .v10-badge {
-        background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%);
-        color: white;
-        padding: 4px 12px;
-        border-radius: 20px;
-        font-weight: bold;
-        font-size: 0.9em;
+    .metric-card {
+        background: #1e1e1e;
+        border-radius: 8px;
+        padding: 15px;
+        border-left: 4px solid #4CAF50;
+    }
+    .signal-card {
+        background: #1e1e1e;
+        border-radius: 8px;
+        padding: 12px;
+        margin: 8px 0;
+        border-left: 4px solid #ff6b35;
+    }
+    .tag {
+        display: inline-block;
+        background: #333;
+        color: #fff;
+        padding: 2px 8px;
+        border-radius: 4px;
+        margin: 2px;
+        font-size: 0.8em;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ===== 侧边栏 =====
 with st.sidebar:
-    st.title("📊 量化盯盘选股")
-    st.markdown('<span class="v10-badge">V10 通达信全买入公式</span>', unsafe_allow_html=True)
-    st.caption("维加斯强庄策略 + 波段回调")
+    st.title("📊 V10 量化选股")
+    st.markdown("**维加斯V10强庄策略**")
+    st.caption("七条件共振 · 波段回调 · 多维评分")
     st.divider()
-    st.markdown("**策略引擎:** V10 全买入公式")
-    st.markdown("**数据源:** akshare + 腾讯K线")
-    st.markdown("**内置策略:** " + str(len(STRATEGY_REGISTRY)) + " 个")
+    
+    # 监控状态
+    monitor = get_monitor()
+    status = monitor.get_status()
+    
+    if status["running"]:
+        st.success(f"🟢 盯盘监控运行中")
+        st.caption(f"监控 {status['watchlist_count']} 只 | {status['last_update']}")
+        if st.button("⏹ 停止监控"):
+            stop_monitoring()
+            st.rerun()
+    else:
+        st.info("🔴 盯盘监控未启动")
+        if st.button("▶ 启动监控"):
+            start_monitoring()
+            st.rerun()
+    
     st.divider()
+    st.markdown(f"**内置策略:** {len(STRATEGY_REGISTRY)} 个")
+    st.markdown("**数据源:** 腾讯K线 + 实时行情")
+    
     if st.button("🔄 刷新数据", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
 # ===== 主页面 =====
-st.title("📊 Dashboard")
-st.caption("V10 策略信号 · 市场概览 · 自选股行情")
-
-# V10 策略概览
-st.subheader("🏆 V10 策略引擎")
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("隧道趋势", "EMA120/200", delta="长期趋势")
-with col2:
-    st.metric("短线通道", "EMA5/20", delta="通道间距>0.8%")
-with col3:
-    st.metric("QW动能", "自定义", delta="SMA(RSV,9)")
-with col4:
-    st.metric("强庄控盘", "加权价格", delta="突变检测")
-
-st.caption("V10 全买入 = 隧道多头 + 双线定式 + QW上升 + 通道间距 + 放量阳线 + 强庄控盘 + MACD金叉")
+st.markdown("""
+<div class="v10-header">
+    <h1 style="margin:0; color:white;">📊 V10 量化盯盘选股系统</h1>
+    <p style="margin:5px 0 0 0; color:#aaa;">维加斯V10强庄策略 · 七条件共振 · 波段回调 · 多维评分 · 盯盘监控</p>
+</div>
+""", unsafe_allow_html=True)
 
 # 市场概览
 st.subheader("🏛️ 市场概览")
-col1, col2, col3, col4 = st.columns(4)
+overview = get_market_overview()
 
-all_stocks = pd.DataFrame()
-try:
-    all_stocks = get_stock_list()
-    if not all_stocks.empty:
-        up_count = len(all_stocks[all_stocks["pct_change"] > 0])
-        down_count = len(all_stocks[all_stocks["pct_change"] < 0])
-        limit_up = len(all_stocks[all_stocks["pct_change"] >= 9.9])
-        limit_down = len(all_stocks[all_stocks["pct_change"] <= -9.9])
+col1, col2, col3, col4, col5 = st.columns(5)
+with col1:
+    st.metric("总股票数", overview.get("total", 0))
+with col2:
+    st.metric("上涨", overview.get("up", 0), delta=f"{overview.get('up_ratio', 0)}%")
+with col3:
+    st.metric("下跌", overview.get("down", 0))
+with col4:
+    st.metric("涨停", overview.get("limit_up", 0), delta="家")
+with col5:
+    st.metric("跌停", overview.get("limit_down", 0), delta="家")
 
-        with col1:
-            st.metric("上涨", f"{up_count}", delta="家")
-        with col2:
-            st.metric("下跌", f"{down_count}", delta="家")
-        with col3:
-            st.metric("涨停", f"{limit_up}", delta="家")
-        with col4:
-            st.metric("跌停", f"{limit_down}", delta="家")
-    else:
-        st.warning("暂无市场数据（可能非交易时间）")
-except Exception as e:
-    st.error(f"获取市场数据失败: {e}")
+# V10 策略信号
+st.subheader("🏆 V10 策略信号")
+
+# 快速扫描
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.caption("选择策略 → 扫描市场 → 发现机会")
+with col2:
+    if st.button("🚀 快速扫描", type="primary"):
+        with st.spinner("扫描中..."):
+            results = scan_market(["v10_full"], max_workers=8)
+            if results:
+                st.success(f"找到 {len(results)} 个V10信号！")
+                for r in results[:5]:
+                    with st.container():
+                        cols = st.columns([1, 2, 1, 1, 2])
+                        with cols[0]:
+                            st.markdown(f"**{r['code']}**")
+                        with cols[1]:
+                            st.markdown(f"**{r['name']}**")
+                        with cols[2]:
+                            st.markdown(f"¥{r['price']}")
+                        with cols[3]:
+                            st.markdown(f"**{r['signal_type']}**")
+                        with cols[4]:
+                            st.markdown(" ".join(r['tags'][:3]))
+            else:
+                st.info("未找到V10信号（可能非交易时间或无符合条件）")
 
 # 涨跌幅排行
 st.subheader("📈 涨跌幅排行")
@@ -104,12 +150,10 @@ with tab1:
     try:
         gainers = get_top_gainers(15)
         if not gainers.empty:
-            display_cols = ["code", "name", "price", "pct_change", "volume", "amount", "turnover"]
-            available = [c for c in display_cols if c in gainers.columns]
             st.dataframe(
-                gainers[available].style.format({
+                gainers.style.format({
                     "price": "¥{:.2f}", "pct_change": "{:+.2f}%",
-                    "amount": "{:,.0f}", "turnover": "{:.2f}%"
+                    "turnover": "{:.2f}%"
                 }),
                 use_container_width=True, hide_index=True,
             )
@@ -120,12 +164,10 @@ with tab2:
     try:
         losers = get_top_losers(15)
         if not losers.empty:
-            display_cols = ["code", "name", "price", "pct_change", "volume", "amount", "turnover"]
-            available = [c for c in display_cols if c in losers.columns]
             st.dataframe(
-                losers[available].style.format({
+                losers.style.format({
                     "price": "¥{:.2f}", "pct_change": "{:+.2f}%",
-                    "amount": "{:,.0f}", "turnover": "{:.2f}%"
+                    "turnover": "{:.2f}%"
                 }),
                 use_container_width=True, hide_index=True,
             )
@@ -142,28 +184,29 @@ if signals:
         use_container_width=True, hide_index=True,
     )
 else:
-    st.info("暂无信号记录，去「选股扫描」页面运行V10策略吧！")
+    st.info("暂无信号记录，点击「快速扫描」开始！")
 
 # 自选股行情
-st.subheader("⭐ 自选股行情")
+st.subheader("⭐ 自选股实时行情")
 watchlist = get_watchlist()
 if watchlist:
-    wl_codes = [w["code"] for w in watchlist]
-    try:
-        wl_data = all_stocks[all_stocks["code"].isin(wl_codes)] if not all_stocks.empty else pd.DataFrame()
-        if not wl_data.empty:
-            display_cols = ["code", "name", "price", "pct_change", "volume", "amount"]
-            available = [c for c in display_cols if c in wl_data.columns]
-            st.dataframe(
-                wl_data[available].style.format({
-                    "price": "¥{:.2f}", "pct_change": "{:+.2f}%",
-                    "amount": "{:,.0f}"
-                }),
-                use_container_width=True, hide_index=True,
-            )
-        else:
-            st.info("自选股数据暂不可用")
-    except Exception as e:
-        st.error(f"获取自选股数据失败: {e}")
+    wl_data = []
+    for stock in watchlist:
+        quote = get_realtime_quote(stock["code"])
+        if quote:
+            wl_data.append({
+                "代码": stock["code"],
+                "名称": stock["name"],
+                "分组": stock["group"],
+                "价格": f"¥{quote['price']:.2f}",
+                "涨跌幅": f"{quote['pct_change']:+.2f}%",
+                "成交额": f"{quote['amount']/10000:.0f}万",
+                "换手率": f"{quote['turnover']:.2f}%",
+            })
+    
+    if wl_data:
+        st.dataframe(pd.DataFrame(wl_data), use_container_width=True, hide_index=True)
+    else:
+        st.warning("无法获取自选股数据")
 else:
     st.info("还没有添加自选股，去「自选股」页面添加吧！")
