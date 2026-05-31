@@ -84,7 +84,7 @@ if watchlist:
             return ''
         
         st.dataframe(
-            df.style.applymap(highlight_pct, subset=['涨跌幅']),
+            df.style.map(highlight_pct, subset=['涨跌幅']),
             use_container_width=True,
             hide_index=True,
         )
