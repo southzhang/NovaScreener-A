@@ -26,34 +26,11 @@ st.set_page_config(
 # ===== 自定义样式 =====
 st.markdown("""
 <style>
-    .v10-header {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        border-radius: 12px;
-        padding: 20px;
-        color: white;
-        margin-bottom: 20px;
-    }
     .metric-card {
         background: #1e1e1e;
         border-radius: 8px;
         padding: 15px;
         border-left: 4px solid #4CAF50;
-    }
-    .signal-card {
-        background: #1e1e1e;
-        border-radius: 8px;
-        padding: 12px;
-        margin: 8px 0;
-        border-left: 4px solid #ff6b35;
-    }
-    .tag {
-        display: inline-block;
-        background: #333;
-        color: #fff;
-        padding: 2px 8px;
-        border-radius: 4px;
-        margin: 2px;
-        font-size: 0.8em;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -91,9 +68,9 @@ with st.sidebar:
 
 # ===== 主页面 =====
 st.markdown("""
-<div class="v10-header">
-    <h1 style="margin:0; color:white;">📊 V10 量化盯盘选股系统</h1>
-    <p style="margin:5px 0 0 0; color:#aaa;">维加斯V10强庄策略 · 七条件共振 · 波段回调 · 多维评分 · 盯盘监控</p>
+<div style="padding: 10px 0 20px 0;">
+    <h2 style="margin:0; color:#ff6b35; font-size: 1.8em;">📊 V10 量化盯盘选股</h2>
+    <p style="margin:5px 0 0 0; color:#888; font-size: 0.95em;">维加斯V10强庄策略 · 七条件共振 · 波段回调 · 多维评分 · 盯盘监控</p>
 </div>
 """, unsafe_allow_html=True)
 
