@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from core.scorer import score_stock, score_batch
-from core.data import get_realtime_quote, get_stock_history, get_watchlist
+from core.data import get_realtime_quote, get_stock_history
 from core.db import get_watchlist as db_get_watchlist
 from core.alerts import send_feishu_card
 
