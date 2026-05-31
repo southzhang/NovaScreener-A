@@ -106,12 +106,11 @@ def crossunder(a, b):
 
 def calc_ma(close, window):
     """简单移动平均"""
+    close = np.asarray(close, dtype=float)
     n = len(close)
     result = np.empty(n, dtype=float)
     result[:window-1] = np.nan
     cumsum = np.cumsum(close)
-    # result[i] = (cumsum[i] - cumsum[i-window]) / window for i >= window
-    # result[window-1] = cumsum[window-1] / window
     result[window-1] = cumsum[window-1] / window
     if n > window:
         result[window:] = (cumsum[window:] - cumsum[:n-window]) / window
