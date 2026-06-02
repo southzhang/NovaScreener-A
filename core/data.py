@@ -116,6 +116,47 @@ def get_stock_history(code: str, days: int = 250) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def get_kline(code: str, period: str = "day", count: int = 250) -> pd.DataFrame:
+    """
+    获取K线数据，支持日K/周K/月K
+    period: "day" | "week" | "month"
+    count: 请求的K线数量（周/月K会多取日线再重采样）
+    """
+    if period == "day":
+        return get_stock_history(code, count)
+
+    # 周K/月K: 先取日线再重采样
+    multiplier = 5 if period == "week" else 22
+    df = get_stock_history(code, count * multiplier + 10)
+    if df.empty:
+        return df
+
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date")
+
+    rule = "W" if period == "week" else "ME"
+    resampled = df.resample(rule).agg({
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+    }).dropna()
+
+    resampled = resampled.tail(count).reset_index()
+    resampled.columns = ["date", "open", "high", "low", "close", "volume"]
+    return resampled
+
+
+def get_stock_name(code: str) -> str:
+    """获取股票名称"""
+    quote = get_realtime_quote(code)
+    if quote and quote.get("name"):
+        return quote["name"]
+    return code
+
+
 # ===== 腾讯实时行情 =====
 
 def get_realtime_quote(code: str) -> dict | None:
@@ -162,118 +203,270 @@ def get_realtime_quotes_batch(codes: list[str]) -> list[dict]:
 
 # ===== 股票列表（腾讯行情源）=====
 
-# 常用股票池（可扩展）
-_STOCK_POOL = [
-    # 沪市主板
+# 常用股票池（备用，仅在API拉取失败时使用）
+_STOCK_POOL_FALLBACK = [
     '600519', '601318', '600036', '601166', '600276', '600887', '601888', '600900',
     '601398', '601939', '600028', '601088', '600050', '601857', '600585', '601601',
     '600016', '601328', '601668', '600031', '601288', '600000', '600104', '600309',
-    # 深市主板
     '000001', '000002', '000858', '000333', '000568', '000651', '000725', '000063',
-    '002415', '002594', '002714', '002304', '000538', '000661', '002352', '000002',
-    # 创业板
+    '002415', '002594', '002714', '002304', '000538', '000661', '002352',
     '300750', '300059', '300015', '300122', '300760', '300124', '300033', '300274',
-    # 科创板
-    '688981', '688111', '688036', '688009', '688012', '688005', '688003', '688002',
 ]
 
 
+def _parse_tencent_realtime_batch(raw: str) -> list[dict]:
+    """解析腾讯qt.gtimg.cn批量返回"""
+    stocks = []
+    for line in raw.strip().split(';'):
+        line = line.strip()
+        if not line or '=' not in line:
+            continue
+        try:
+            parts = line.split('=')[1].strip('"').split('~')
+            if len(parts) < 40:
+                continue
+            code = parts[2]
+            name = parts[1]
+            price = float(parts[3]) if parts[3] else 0
+            if price <= 0:
+                continue
+            # 过滤ST/退市
+            if 'ST' in name or '退' in name:
+                continue
+            # parts[35] = "现价/成交量(手)/成交额(元)" 组合字段（实测索引35，非文档的36）
+            amount_raw = 0
+            if parts[35] and '/' in parts[35]:
+                try:
+                    amount_raw = float(parts[35].split('/')[2])
+                except (IndexError, ValueError):
+                    amount_raw = 0
+            stocks.append({
+                "code": code,
+                "name": name,
+                "price": price,
+                "pct_change": float(parts[32]) if parts[32] else 0,
+                "turnover": float(parts[38]) if parts[38] else 0,
+                "volume": float(parts[6]) if parts[6] else 0,
+                "amount": amount_raw,
+                "outer_vol": float(parts[7]) if parts[7] else 0,
+                "inner_vol": float(parts[8]) if parts[8] else 0,
+            })
+        except Exception:
+            continue
+    return stocks
+
+
 def get_stock_list() -> pd.DataFrame:
-    """获取股票列表（腾讯行情API）"""
+    """获取全市场A股列表（腾讯行情API批量拉取）"""
     cache_key = "stock_list"
     cached = _get_cached(cache_key)
     if cached is not None and isinstance(cached, pd.DataFrame):
         return cached
 
-    stocks = []
-    
-    # 用腾讯行情API批量获取
-    for code in _STOCK_POOL:
-        quote = get_realtime_quote(code)
-        if quote:
-            stocks.append({
-                "code": code,
-                "name": quote["name"],
-                "price": quote["price"],
-                "pct_change": quote["pct_change"],
-                "turnover": quote["turnover"],
-                "volume": quote["volume"],
-                "amount": quote["amount"],
-            })
+    all_stocks = []
 
-    if stocks:
-        df = pd.DataFrame(stocks)
+    # 构建全市场secid列表（与v10_realtime_scan.py一致）
+    tc_codes = []
+    # 沪市主板 600000-609999
+    for i in range(600000, 610000):
+        tc_codes.append(f"sh{i:06d}")
+    # 深市主板 000001-003999
+    for i in range(1, 4000):
+        tc_codes.append(f"sz{i:06d}")
+    # 创业板 300000-309999
+    for i in range(300000, 310000):
+        tc_codes.append(f"sz{i:06d}")
+    # 科创板 688000-689999
+    for i in range(688000, 690000):
+        tc_codes.append(f"sh{i:06d}")
+
+    # 批量拉取（每批80个）
+    batch_size = 80
+    for i in range(0, len(tc_codes), batch_size):
+        batch = tc_codes[i:i + batch_size]
+        qs = ",".join(batch)
+        url = f"https://qt.gtimg.cn/q={qs}"
+        try:
+            resp = requests.get(url, timeout=15, headers=HEADERS)
+            raw = resp.text
+            parsed = _parse_tencent_realtime_batch(raw)
+            all_stocks.extend(parsed)
+        except Exception:
+            continue
+
+    if not all_stocks:
+        # 降级到备用池
+        print("[数据] 腾讯全量拉取失败，降级到备用股票池")
+        for code in _STOCK_POOL_FALLBACK:
+            quote = get_realtime_quote(code)
+            if quote:
+                all_stocks.append({
+                    "code": code, "name": quote["name"],
+                    "price": quote["price"], "pct_change": quote["pct_change"],
+                    "turnover": quote["turnover"], "volume": quote["volume"],
+                    "amount": quote["amount"],
+                })
+
+    if all_stocks:
+        df = pd.DataFrame(all_stocks)
+        # 基本过滤：去停牌/低价/无成交
+        df = df[(df["price"] > 3) & (df["volume"] > 0)]
         _set_cache(cache_key, df)
+        print(f"[数据] 获取到 {len(df)} 只有效股票")
         return df.copy()
-    
+
     return pd.DataFrame()
 
 
 # ===== 板块数据 =====
 
-def get_sector_data() -> pd.DataFrame:
-    """获取板块数据（东方财富）"""
-    cache_key = "sector_data"
+# 缓存板块排名
+_sector_cache = {}
+_sector_cache_ts = 0
+
+
+def get_sector_ranking(limit: int = 30) -> list[dict]:
+    """获取板块涨幅排名（东方财富）"""
+    global _sector_cache, _sector_cache_ts
+    import time
+    if _sector_cache and time.time() - _sector_cache_ts < 300:
+        return _sector_cache.get("ranking", [])[:limit]
+
+    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    ranking = []
+    for fs_type, type_name in [("m:90+t:2", "行业"), ("m:90+t:3", "概念")]:
+        params = {
+            "pn": 1, "pz": 30, "po": 1, "np": 1,
+            "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+            "fltt": 2, "invt": 2, "fid": "f3",
+            "fs": fs_type,
+            "fields": "f2,f3,f4,f12,f14",
+        }
+        try:
+            resp = requests.get(url, params=params, timeout=10, headers=HEADERS)
+            data = resp.json()
+            for item in data.get("data", {}).get("diff", []):
+                ranking.append({
+                    "name": item.get("f14", ""),
+                    "code": item.get("f12", ""),
+                    "change_pct": item.get("f3", 0),
+                    "type": type_name,
+                })
+        except Exception:
+            continue
+
+    ranking.sort(key=lambda x: x.get("change_pct", 0), reverse=True)
+    _sector_cache = {"ranking": ranking}
+    _sector_cache_ts = time.time()
+    return ranking[:limit]
+
+
+def get_stock_sectors(code: str) -> list[str]:
+    """获取股票所属板块（东方财富F10）"""
+    cache_key = f"sectors_{code}"
     cached = _get_cached(cache_key)
-    if cached is not None and isinstance(cached, pd.DataFrame):
+    if cached is not None:
         return cached
 
+    url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
+    params = {
+        "reportName": "RPT_F10_CORETHEME_BOARDTYPE",
+        "columns": "BOARD_NAME,BOARD_CODE,BOARD_TYPE",
+        "filter": f'(SECURITY_CODE="{code}")',
+        "pageSize": 30,
+    }
     try:
-        import akshare as ak
-        df = ak.stock_board_concept_name_em()
-        df = df.rename(columns={
-            "板块名称": "name", "板块代码": "code",
-            "最新价": "price", "涨跌幅": "pct_change",
-        })
-        _set_cache(cache_key, df)
-        return df.copy()
-    except Exception as e:
-        print(f"[数据] 板块数据失败: {e}")
-        return pd.DataFrame()
+        resp = requests.get(url, params=params, timeout=10, headers=HEADERS)
+        data = resp.json()
+        items = data.get("result", {}).get("data", [])
+        sectors = [item.get("BOARD_NAME", "") for item in items if item.get("BOARD_NAME")]
+        _set_cache(cache_key, sectors)
+        return sectors
+    except Exception:
+        pass
+
+    return []
+
+
+def get_sector_score(code: str) -> float:
+    """计算板块风口得分（0-10分）
+    股票所属板块在涨幅排名前10 → +10分
+    前20 → +7分
+    前30 → +4分
+    不在前30 → 0分
+    """
+    sectors = get_stock_sectors(code)
+    if not sectors:
+        return 0
+
+    ranking = get_sector_ranking(limit=50)
+    if not ranking:
+        return 0
+
+    # 找股票所属板块在排名中的位置
+    best_rank = 999
+    for sector_name in sectors:
+        for rank_idx, r in enumerate(ranking):
+            if sector_name in r["name"] or r["name"] in sector_name:
+                best_rank = min(best_rank, rank_idx)
+                break
+
+    if best_rank < 10:
+        return 10
+    elif best_rank < 20:
+        return 7
+    elif best_rank < 30:
+        return 4
+    else:
+        return 0
 
 
 # ===== 资金面数据 =====
 
 def get_capital_flow(code: str) -> dict | None:
-    """获取资金面数据（主力净流入）"""
+    """获取资金面数据
+    腾讯行情:
+    - field[7] = 外盘(手) — 主动买入
+    - field[8] = 内盘(手) — 主动卖出
+    - 用外盘/内盘比例判断资金方向
+    - field[44] = 总成交额(万元)
+    """
     cache_key = f"capital_flow_{code}"
     cached = _get_cached(cache_key)
     if cached is not None:
         return cached
 
-    # 尝试从缓存文件读取
-    cache_path = os.path.expanduser("~/.hermes/cache/capital_flow.json")
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path) as f:
-                data = json.load(f)
-            flow_data = data.get("dimensions", {}).get("capital_flow", {})
-            if code in flow_data:
-                result = flow_data[code]
+    prefix = "sh" if code.startswith("6") else "sz"
+    url = f"https://qt.gtimg.cn/q={prefix}{code}"
+    try:
+        resp = requests.get(url, timeout=5, headers=HEADERS)
+        text = resp.text
+        if "=" in text:
+            parts = text.split("=")[1].strip('";\n').split("~")
+            if len(parts) > 50:
+                buy_vol = float(parts[7]) if parts[7] else 0   # 外盘(手)
+                sell_vol = float(parts[8]) if parts[8] else 0  # 内盘(手)
+                total_vol = buy_vol + sell_vol
+                # 买盘占比
+                buy_ratio = buy_vol / total_vol * 100 if total_vol > 0 else 50
+                # 推算主力净流入(万元): 用成交额 × 买卖差比例
+                amount = float(parts[37]) if parts[37] else 0  # 成交额(万元)
+                net_inflow = amount * (buy_ratio - 50) / 100
+
+                result = {
+                    "main_net_inflow": round(net_inflow, 2),  # 万元
+                    "buy_ratio": round(buy_ratio, 1),  # 买盘占比%
+                    "buy_vol": buy_vol,
+                    "sell_vol": sell_vol,
+                    "name": parts[1] if len(parts) > 1 else code,
+                    "source": "tencent_buy_sell_ratio",
+                }
                 _set_cache(cache_key, result)
                 return result
-        except Exception:
-            pass
-
-    # 尝试10jqka实时查询
-    try:
-        url = f"http://d.10jqka.com.cn/v2/realhead/hs_{code}/last.js"
-        resp = requests.get(url, timeout=5, headers=HEADERS)
-        if resp.status_code == 200:
-            text = resp.text
-            # 解析JSONP格式
-            json_str = text[text.index("(") + 1:text.rindex(")")]
-            data = json.loads(json_str)
-            result = {
-                "main_net_inflow": float(data.get("main_net_inflow", 0)),
-                "name": data.get("name", code),
-            }
-            _set_cache(cache_key, result)
-            return result
     except Exception:
         pass
 
-    return None
+    return {"main_net_inflow": 0, "buy_ratio": 50, "name": code}
 
 
 # ===== 基本面数据 =====

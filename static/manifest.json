@@ -1,0 +1,21 @@
+{
+  "name": "V10 量化选股",
+  "short_name": "V10选股",
+  "description": "A股量化盯盘选股系统 — V10策略引擎 + 6维评分 + 持仓管理",
+  "start_url": "http://localhost:8501",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1117",
+  "theme_color": "#ff6b35",
+  "icons": [
+    {
+      "src": "http://localhost:8502/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["finance", "business"],
+  "lang": "zh-CN"
+}

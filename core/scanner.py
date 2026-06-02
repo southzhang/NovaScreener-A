@@ -6,6 +6,7 @@ from .strategies import (
     STRATEGY_REGISTRY, V10Signal, PullbackSignal,
     scan_v10_full, scan_pullback,
 )
+from .trend_swing import scan_trend_swing
 from .db import save_signal
 
 
@@ -62,6 +63,24 @@ def scan_single_stock(code: str, name: str, strategy_keys: list[str], params_dic
                     "tags": signal.tags,
                 })
 
+        # 趋势波段
+        if "trend_swing" in strategy_keys and len(close) >= 150:
+            signal = scan_trend_swing(close, high, low, volume, open_p)
+            if signal:
+                signal.code = code
+                signal.name = name
+                results.append({
+                    "type": "pullback",
+                    "code": code,
+                    "name": name,
+                    "strategy": "趋势波段",
+                    "level": "⭐ 趋势波段" if signal.score >= 70 else "🟡 观察",
+                    "price": signal.price,
+                    "score": signal.score,
+                    "detail": signal.detail,
+                    "tags": signal.tags,
+                })
+
         # 经典策略
         for sk in strategy_keys:
             if sk in ["v10_full", "pullback"]:
@@ -89,7 +108,17 @@ def scan_single_stock(code: str, name: str, strategy_keys: list[str], params_dic
 
         # 保存信号到数据库
         for r in results:
-            save_signal(r["code"], r["name"], r["strategy"], r["price"], str(r.get("detail", "")))
+            # 计算等级
+            score = r.get("score", 0)
+            if score >= 80:
+                grade = "🔴 强推"
+            elif score >= 60:
+                grade = "🟠 关注"
+            elif score >= 40:
+                grade = "🟡 观察"
+            else:
+                grade = "⚪ 弱势"
+            save_signal(r["code"], r["name"], r["strategy"], r["price"], str(r.get("detail", "")), score, grade)
 
     except Exception as e:
         print(f"[扫描] {code} 出错: {e}")

@@ -4,13 +4,14 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
-from core.db import init_db, get_signals, get_watchlist, add_watchlist, remove_watchlist
+from core.db import init_db, get_signals, get_watchlist, add_watchlist, remove_watchlist, get_positions
 from core.data import get_stock_list, get_top_gainers, get_top_losers, get_realtime_quote, get_stock_history
 from core.strategies import STRATEGY_REGISTRY, get_strategy_names
 from core.scanner import scan_market, scan_watchlist, get_market_overview
 from core.scorer import score_stock, score_batch
 from core.monitor import get_monitor, start_monitoring, stop_monitoring
 from core.alerts import send_feishu_card, send_batch_signals
+from core.ui import inject_global_css, render_theme_toggle
 
 # 初始化
 load_dotenv()
@@ -23,17 +24,8 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ===== 自定义样式 =====
-st.markdown("""
-<style>
-    .metric-card {
-        background: #1e1e1e;
-        border-radius: 8px;
-        padding: 15px;
-        border-left: 4px solid #4CAF50;
-    }
-</style>
-""", unsafe_allow_html=True)
+# ===== 全局样式 =====
+inject_global_css()
 
 # ===== 侧边栏 =====
 with st.sidebar:
@@ -62,33 +54,53 @@ with st.sidebar:
     st.markdown(f"**内置策略:** {len(STRATEGY_REGISTRY)} 个")
     st.markdown("**数据源:** 腾讯K线 + 实时行情")
     
-    if st.button("🔄 刷新数据", use_container_width=True):
+    if st.button("🔄 刷新数据", width='stretch'):
         st.cache_data.clear()
         st.rerun()
 
 # ===== 主页面 =====
-st.markdown("""
+# 主题切换按钮（右上角）
+render_theme_toggle()
+
+st.html("""
 <div style="padding: 10px 0 20px 0;">
     <h2 style="margin:0; color:#ff6b35; font-size: 1.8em;">📊 V10 量化盯盘选股</h2>
     <p style="margin:5px 0 0 0; color:#888; font-size: 0.95em;">维加斯V10强庄策略 · 七条件共振 · 波段回调 · 多维评分 · 盯盘监控</p>
 </div>
-""", unsafe_allow_html=True)
+""")
 
-# 市场概览
+# 市场概览（红涨绿跌）
 st.subheader("🏛️ 市场概览")
 overview = get_market_overview()
 
-col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    st.metric("总股票数", overview.get("total", 0))
-with col2:
-    st.metric("上涨", overview.get("up", 0), delta=f"{overview.get('up_ratio', 0)}%")
-with col3:
-    st.metric("下跌", overview.get("down", 0))
-with col4:
-    st.metric("涨停", overview.get("limit_up", 0), delta="家")
-with col5:
-    st.metric("跌停", overview.get("limit_down", 0), delta="家")
+_mkt_html = f"""
+<div style="display:flex; gap:12px; flex-wrap:wrap;">
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+    <div style="color:var(--text-muted); font-size:0.85em;">总股票数</div>
+    <div style="font-size:1.6em; font-weight:700;">{overview.get("total", 0)}</div>
+  </div>
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+    <div style="color:var(--text-muted); font-size:0.85em;">上涨</div>
+    <div style="font-size:1.6em; font-weight:700; color:#ef4444;">{overview.get("up", 0)}</div>
+    <div style="color:#ef4444; font-size:0.85em;">▲ {overview.get("up_ratio", 0)}%</div>
+  </div>
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+    <div style="color:var(--text-muted); font-size:0.85em;">下跌</div>
+    <div style="font-size:1.6em; font-weight:700; color:#22c55e;">{overview.get("down", 0)}</div>
+  </div>
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+    <div style="color:var(--text-muted); font-size:0.85em;">涨停</div>
+    <div style="font-size:1.6em; font-weight:700; color:#ef4444;">{overview.get("limit_up", 0)}</div>
+    <div style="color:#ef4444; font-size:0.85em;">家</div>
+  </div>
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+    <div style="color:var(--text-muted); font-size:0.85em;">跌停</div>
+    <div style="font-size:1.6em; font-weight:700; color:#22c55e;">{overview.get("limit_down", 0)}</div>
+    <div style="color:#22c55e; font-size:0.85em;">家</div>
+  </div>
+</div>
+"""
+st.html(_mkt_html)
 
 # V10 策略信号
 st.subheader("🏆 V10 策略信号")
@@ -127,12 +139,21 @@ with tab1:
     try:
         gainers = get_top_gainers(15)
         if not gainers.empty:
+            gainers_display = gainers[["code", "name", "price", "pct_change", "turnover"]].copy()
+            gainers_display.columns = ["代码", "名称", "现价", "涨跌幅", "换手率"]
+            
+            def _color_pct_red(val):
+                if isinstance(val, (int, float)):
+                    if val > 0: return "color: #ef4444; font-weight: 600"
+                    elif val < 0: return "color: #22c55e; font-weight: 600"
+                return ""
+            
             st.dataframe(
-                gainers.style.format({
-                    "price": "¥{:.2f}", "pct_change": "{:+.2f}%",
-                    "turnover": "{:.2f}%"
-                }),
-                use_container_width=True, hide_index=True,
+                gainers_display.style.format({
+                    "现价": "¥{:.2f}", "涨跌幅": "{:+.2f}%",
+                    "换手率": "{:.2f}%"
+                }).map(_color_pct_red, subset=["涨跌幅"]),
+                width='stretch', hide_index=True,
             )
     except Exception as e:
         st.error(f"获取涨幅榜失败: {e}")
@@ -141,24 +162,79 @@ with tab2:
     try:
         losers = get_top_losers(15)
         if not losers.empty:
+            losers_display = losers[["code", "name", "price", "pct_change", "turnover"]].copy()
+            losers_display.columns = ["代码", "名称", "现价", "涨跌幅", "换手率"]
+            
+            def _color_pct_green(val):
+                if isinstance(val, (int, float)):
+                    if val > 0: return "color: #ef4444; font-weight: 600"
+                    elif val < 0: return "color: #22c55e; font-weight: 600"
+                return ""
+            
             st.dataframe(
-                losers.style.format({
-                    "price": "¥{:.2f}", "pct_change": "{:+.2f}%",
-                    "turnover": "{:.2f}%"
-                }),
-                use_container_width=True, hide_index=True,
+                losers_display.style.format({
+                    "现价": "¥{:.2f}", "涨跌幅": "{:+.2f}%",
+                    "换手率": "{:.2f}%"
+                }).map(_color_pct_green, subset=["涨跌幅"]),
+                width='stretch', hide_index=True,
             )
     except Exception as e:
         st.error(f"获取跌幅榜失败: {e}")
 
-# 最近信号
+# 最近信号（含实时涨跌幅）
 st.subheader("🎯 最近策略信号")
-signals = get_signals(limit=20)
+signals = get_signals(limit=50)
 if signals:
     df_signals = pd.DataFrame(signals)
+    df_signals = df_signals.sort_values("triggered_at", ascending=False).drop_duplicates(subset=["code"], keep="first").head(15)
+    cols = ["code", "name", "strategy", "price", "score", "grade", "triggered_at"]
+    for c in cols:
+        if c not in df_signals.columns:
+            df_signals[c] = "" if c in ("grade",) else 0
+    
+    # 获取实时行情
+    realtime_data = {}
+    for _, row in df_signals.iterrows():
+        q = get_realtime_quote(row["code"])
+        if q:
+            realtime_data[row["code"]] = q
+    
+    # 构建显示数据
+    rows = []
+    for _, row in df_signals.iterrows():
+        q = realtime_data.get(row["code"], {})
+        cur_price = q.get("price", 0)
+        pct = q.get("pct_change", 0)
+        rows.append({
+            "代码": row["code"],
+            "名称": row["name"],
+            "策略": row["strategy"],
+            "信号价": f"¥{row['price']:.2f}" if row["price"] else "-",
+            "现价": f"¥{cur_price:.2f}" if cur_price else "-",
+            "涨跌幅": pct,
+            "得分": row["score"],
+            "等级": row["grade"],
+            "触发时间": row["triggered_at"],
+        })
+    
+    df_display = pd.DataFrame(rows)
+    
+    # 红涨绿跌配色
+    def _color_pct(val):
+        if isinstance(val, (int, float)):
+            if val > 0:
+                return "color: #ef4444; font-weight: 600"
+            elif val < 0:
+                return "color: #22c55e; font-weight: 600"
+        return ""
+    
+    df_styled = df_display.style.map(_color_pct, subset=["涨跌幅"])
     st.dataframe(
-        df_signals[["code", "name", "strategy", "price", "detail", "triggered_at"]],
-        use_container_width=True, hide_index=True,
+        df_styled,
+        width='stretch', hide_index=True,
+        column_config={
+            "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%+.2f%%"),
+        }
     )
 else:
     st.info("暂无信号记录，点击「快速扫描」开始！")
@@ -175,15 +251,114 @@ if watchlist:
                 "代码": stock["code"],
                 "名称": stock["name"],
                 "分组": stock["group"],
-                "价格": f"¥{quote['price']:.2f}",
-                "涨跌幅": f"{quote['pct_change']:+.2f}%",
+                "价格": quote['price'],
+                "涨跌幅": quote['pct_change'],
                 "成交额": f"{quote['amount']/10000:.0f}万",
                 "换手率": f"{quote['turnover']:.2f}%",
             })
     
     if wl_data:
-        st.dataframe(pd.DataFrame(wl_data), use_container_width=True, hide_index=True)
+        df_wl = pd.DataFrame(wl_data)
+        
+        def _color_wl_pct(val):
+            if isinstance(val, (int, float)):
+                if val > 0: return "color: #ef4444; font-weight: 600"
+                elif val < 0: return "color: #22c55e; font-weight: 600"
+            return ""
+        
+        st.dataframe(
+            df_wl.style.format({
+                "价格": "¥{:.2f}", "涨跌幅": "{:+.2f}%",
+            }).map(_color_wl_pct, subset=["涨跌幅"]),
+            width='stretch', hide_index=True,
+        )
     else:
         st.warning("无法获取自选股数据")
 else:
     st.info("还没有添加自选股，去「自选股」页面添加吧！")
+
+# 持仓概览
+st.subheader("💼 持仓概览")
+positions = get_positions()
+if positions:
+    pos_data = []
+    for p in positions:
+        # 计算持仓盈亏
+        current_price = get_realtime_quote(p["code"])
+        if current_price:
+            profit_pct = (current_price["price"] - p["buy_price"]) / p["buy_price"] * 100
+            profit_amount = (current_price["price"] - p["buy_price"]) * p["quantity"]
+            # 红涨绿跌配色
+            profit_color = "#ff4b4b" if profit_pct >= 0 else "#00c853"
+            
+            # 获取持仓建议
+            try:
+                from core.data import get_stock_history
+                from core.portfolio_advisor import analyze_position
+                
+                hist = get_stock_history(p["code"], days=250)
+                if hist is not None and len(hist) >= 50:
+                    close_arr = hist["close"].values.astype(np.float64)
+                    high_arr = hist["high"].values.astype(np.float64)
+                    low_arr = hist["low"].values.astype(np.float64)
+                    vol_arr = hist["volume"].values.astype(np.float64)
+                    open_arr = hist["open"].values.astype(np.float64)
+                    
+                    advice = analyze_position(
+                        code=p["code"],
+                        buy_price=p["buy_price"],
+                        current_price=current_price["price"],
+                        quantity=p["quantity"],
+                        stop_loss=p.get("stop_loss", 0),
+                        target_price=p.get("target_price", 0),
+                        close=close_arr,
+                        high=high_arr,
+                        low=low_arr,
+                        volume=vol_arr,
+                        open_price=open_arr,
+                    )
+                    if advice:
+                        action = advice.action
+                        reason = advice.reason
+                    else:
+                        action = "📊 数据不足"
+                        reason = "无法生成建议"
+                else:
+                    action = "📊 数据不足"
+                    reason = "历史数据不足"
+            except Exception as e:
+                action = "⚠️ 分析失败"
+                reason = str(e)[:20]
+            
+            pos_data.append({
+                "代码": p["code"],
+                "名称": p["name"],
+                "买入价": f"¥{p['buy_price']:.2f}",
+                "现价": f"¥{current_price['price']:.2f}",
+                "数量": p["quantity"],
+                "盈亏": f"¥{profit_amount:+.2f}",
+                "盈亏%": f"{profit_pct:+.2f}%",
+                "止损": f"¥{p.get('stop_loss', 0):.2f}" if p.get('stop_loss') else "-",
+                "目标": f"¥{p.get('target_price', 0):.2f}" if p.get('target_price') else "-",
+                "建议": action,
+            })
+        else:
+            pos_data.append({
+                "代码": p["code"],
+                "名称": p["name"],
+                "买入价": f"¥{p['buy_price']:.2f}",
+                "现价": "获取失败",
+                "数量": p["quantity"],
+                "盈亏": "-",
+                "盈亏%": "-",
+                "止损": f"¥{p.get('stop_loss', 0):.2f}" if p.get('stop_loss') else "-",
+                "目标": f"¥{p.get('target_price', 0):.2f}" if p.get('target_price') else "-",
+                "建议": "⚠️ 无法获取",
+            })
+    
+    if pos_data:
+        st.dataframe(pd.DataFrame(pos_data), width='stretch', hide_index=True)
+    else:
+        st.warning("无法获取持仓数据")
+else:
+    st.info("还没有添加持仓，去「持仓管理」页面添加吧！")

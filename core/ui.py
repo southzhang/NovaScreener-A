@@ -1,0 +1,557 @@
+"""共享 UI 样式模块 — 所有页面统一导入（含双主题 + 切换按钮）"""
+import streamlit as st
+
+# ===== 完整双主题 CSS（用 data-theme 属性控制） =====
+GLOBAL_CSS = """
+<style>
+    /* ========== 浅色主题（默认） ========== */
+    :root, :root[data-theme="light"] {
+        --bg-primary: #f8f9fb;
+        --bg-secondary: #ffffff;
+        --bg-card: #ffffff;
+        --bg-card-hover: #f0f2f5;
+        --border-color: #e2e8f0;
+        --border-glow: #ff6b3520;
+        --text-primary: #1a202c;
+        --text-secondary: #4a5568;
+        --text-muted: #a0aec0;
+        --accent: #ff6b35;
+        --accent-soft: #ff6b3515;
+        --up-color: #dc2626;
+        --down-color: #16a34a;
+        --up-bg: #dc262610;
+        --down-bg: #16a34a10;
+        --warning-color: #d97706;
+        --info-color: #2563eb;
+        --sidebar-bg: #f1f3f5;
+        --sidebar-border: #e2e8f0;
+        --table-header-bg: #f1f3f5;
+        --table-header-color: #ff6b35;
+        --table-row-hover: #f8f9fb;
+        --input-bg: #ffffff;
+        --input-border: #d1d5db;
+        --tab-bg: #f1f3f5;
+        --shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --shadow-hover: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    /* ========== 深色主题 ========== */
+    :root[data-theme="dark"] {
+        --bg-primary: #0a0e17;
+        --bg-secondary: #111827;
+        --bg-card: #1a2332;
+        --bg-card-hover: #1f2b3d;
+        --border-color: #2a3a4e;
+        --border-glow: #ff6b3540;
+        --text-primary: #e8eaf0;
+        --text-secondary: #8892a4;
+        --text-muted: #5a6577;
+        --up-color: #ff4b4b;
+        --down-color: #00c853;
+        --up-bg: #ff4b4b15;
+        --down-bg: #00c85315;
+        --warning-color: #ffab40;
+        --info-color: #42a5f5;
+        --sidebar-bg: #0d1320;
+        --sidebar-border: #1e2d40;
+        --table-header-bg: #1a2332;
+        --table-header-color: #ff6b35;
+        --table-row-hover: #1f2b3d;
+        --input-bg: #1a2332;
+        --input-border: #2a3a4e;
+        --tab-bg: #111827;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-hover: 0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    /* ========== 全局背景 ========== */
+    .stApp {
+        background: var(--bg-primary);
+        color: var(--text-primary);
+    }
+    [data-testid="stHeader"] { background: transparent !important; }
+
+    /* ========== 侧边栏 ========== */
+    [data-testid="stSidebar"] {
+        background: var(--sidebar-bg);
+        border-right: 1px solid var(--sidebar-border);
+    }
+    [data-testid="stSidebar"] [data-testid="stMarkdown"] { color: var(--text-secondary); }
+    [data-testid="stSidebar"] .stButton button {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        color: var(--text-primary);
+        transition: all 0.2s ease;
+    }
+    [data-testid="stSidebar"] .stButton button:hover {
+        border-color: var(--accent);
+        box-shadow: 0 0 12px var(--border-glow);
+    }
+
+    /* ========== A股配色 ========== */
+    [data-testid="stMetricDelta"] [data-testid="stMetricDeltaIcon-Up"] svg { color: var(--up-color) !important; }
+    [data-testid="stMetricDelta"] [data-testid="stMetricDeltaIcon-Down"] svg { color: var(--down-color) !important; }
+    [data-testid="stMetricDelta"] div[data-testid="stMetricDeltaIcon-Up"] + span { color: var(--up-color) !important; }
+    [data-testid="stMetricDelta"] div[data-testid="stMetricDeltaIcon-Down"] + span { color: var(--down-color) !important; }
+
+    /* ========== Metric 卡片 ========== */
+    [data-testid="stMetric"] {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 12px 16px;
+        box-shadow: var(--shadow);
+    }
+    [data-testid="stMetric"]:hover { border-color: var(--accent); box-shadow: var(--shadow-hover); }
+    [data-testid="stMetric"] label { color: var(--text-secondary) !important; font-size: 0.78em !important; }
+    [data-testid="stMetric"] [data-testid="stMetricValue"] { color: var(--text-primary) !important; font-weight: 700 !important; }
+
+    /* ========== 标题 ========== */
+    h1 {
+        background: linear-gradient(135deg, #ff6b35 0%, #ff8f60 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800 !important;
+    }
+    h2, .stSubheader {
+        color: var(--text-primary) !important;
+        font-weight: 700 !important;
+        border-bottom: 2px solid var(--border-color);
+        padding-bottom: 8px;
+        margin-top: 1.5rem !important;
+    }
+    h3 { color: var(--text-secondary) !important; font-weight: 600 !important; }
+
+    /* ========== 分割线 ========== */
+    hr {
+        border: none;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+        margin: 1.5rem 0;
+    }
+
+    /* ========== Tab ========== */
+    .stTabs [data-baseweb="tab-list"] {
+        background: var(--tab-bg);
+        border-radius: 10px;
+        padding: 4px;
+        gap: 4px;
+        border: 1px solid var(--border-color);
+    }
+    .stTabs [data-baseweb="tab"] { background: transparent; border-radius: 8px; color: var(--text-secondary); }
+    .stTabs [aria-selected="true"] {
+        background: linear-gradient(135deg, #ff6b35 0%, #e55a28 100%) !important;
+        color: #fff !important;
+    }
+    .stTabs [data-baseweb="tab-highlight"],
+    .stTabs [data-baseweb="tab-border"] { display: none; }
+
+    /* ========== 表格 ========== */
+    .stDataFrame { border-radius: 10px; overflow: hidden; border: 1px solid var(--border-color); }
+    [data-testid="stDataFrame"] thead tr th {
+        background: var(--table-header-bg) !important;
+        color: var(--table-header-color) !important;
+        font-weight: 600 !important;
+        border-bottom: 2px solid var(--accent) !important;
+    }
+    [data-testid="stDataFrame"] tbody tr:hover { background: var(--table-row-hover) !important; }
+
+    /* ========== 输入框 ========== */
+    .stTextInput input, .stNumberInput input, .stTextArea textarea {
+        background: var(--input-bg) !important;
+        border-color: var(--input-border) !important;
+        color: var(--text-primary) !important;
+    }
+
+    /* ========== 通用卡片 ========== */
+    .dash-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px; box-shadow: var(--shadow); }
+    .dash-card-header { color: var(--text-secondary); font-size: 0.82em; }
+    .dash-card-value { color: var(--text-primary); font-size: 1.1em; font-weight: 700; }
+    .dash-card-sub { color: var(--text-secondary); font-size: 0.85em; }
+
+    /* ========== 扫描/持仓卡片 ========== */
+    .scan-result-card, .position-card {
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin-bottom: 10px;
+        box-shadow: var(--shadow);
+    }
+    .scan-result-card:hover, .position-card:hover { border-color: var(--accent); box-shadow: var(--shadow-hover); }
+    .position-metric { text-align: center; }
+    .position-metric-label { color: var(--text-secondary); font-size: 0.78em; }
+    .position-metric-value { color: var(--text-primary); font-weight: 600; }
+
+    /* ========== 标签 ========== */
+    .tag { display: inline-block; padding: 2px 10px; border-radius: 6px; font-size: 0.82em; font-weight: 600; }
+    .tag-up { background: var(--up-bg); color: var(--up-color); }
+    .tag-down { background: var(--down-bg); color: var(--down-color); }
+    .tag-accent { background: var(--accent-soft); color: var(--accent); }
+    .tag-info { background: color-mix(in srgb, var(--info-color) 15%, transparent); color: var(--info-color); }
+
+    /* ========== 状态指示 ========== */
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+    .status-dot-on { background: var(--down-color); animation: pulse 2s infinite; }
+    .status-dot-off { background: var(--up-color); }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+    /* ========== 隐藏元素 ========== */
+    #MainMenu, header, footer { visibility: hidden; }
+    .stDeployButton { display: none; }
+    .block-container { padding-top: 1rem; }
+
+    /* ========== 滚动条 ========== */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-primary); }
+    ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+    /* ========== 背景渐变 ========== */
+    :root .stApp, :root[data-theme="light"] .stApp { 
+        background: linear-gradient(180deg, #f8f9fb 0%, #eef1f5 100%); 
+    }
+    :root[data-theme="dark"] .stApp { 
+        background: linear-gradient(180deg, #0a0e17 0%, #111827 100%); 
+    }
+    :root[data-theme="light"] [data-testid="stSidebar"] { 
+        background: linear-gradient(180deg, #f1f3f5 0%, #e8ecf0 100%); 
+    }
+    :root[data-theme="dark"] [data-testid="stSidebar"] { 
+        background: linear-gradient(180deg, #0d1320 0%, #111827 100%); 
+    }
+</style>
+"""
+
+
+def inject_global_css():
+    """注入全局 CSS 样式（根据 session_state 选择主题变量）"""
+    # 根据 session_state 选择主题变量
+    theme = st.session_state.get("theme", "light")
+    if theme == "dark":
+        css_vars = """
+        --bg-primary: #0a0e17;
+        --bg-secondary: #111827;
+        --bg-card: #1a2332;
+        --bg-card-hover: #1f2b3d;
+        --border-color: #2a3a4e;
+        --border-glow: #ff6b3540;
+        --text-primary: #e8eaf0;
+        --text-secondary: #8892a4;
+        --text-muted: #5a6577;
+        --accent: #ff6b35;
+        --accent-soft: #ff6b3515;
+        --up-color: #ff4b4b;
+        --down-color: #00c853;
+        --up-bg: #ff4b4b15;
+        --down-bg: #00c85315;
+        --warning-color: #ffab40;
+        --info-color: #42a5f5;
+        --sidebar-bg: #0d1320;
+        --sidebar-border: #1e2d40;
+        --table-header-bg: #1a2332;
+        --table-header-color: #ff6b35;
+        --table-row-hover: #1f2b3d;
+        --input-bg: #1a2332;
+        --input-border: #2a3a4e;
+        --tab-bg: #111827;
+        --shadow: 0 1px 3px rgba(0,0,0,0.3);
+        --shadow-hover: 0 4px 12px rgba(0,0,0,0.4);
+        """
+        bg_gradient = "linear-gradient(180deg, #0a0e17 0%, #111827 100%)"
+        sidebar_gradient = "linear-gradient(180deg, #0d1320 0%, #111827 100%)"
+    else:
+        css_vars = """
+        --bg-primary: #f8f9fb;
+        --bg-secondary: #ffffff;
+        --bg-card: #ffffff;
+        --bg-card-hover: #f0f2f5;
+        --border-color: #e2e8f0;
+        --border-glow: #ff6b3520;
+        --text-primary: #1a202c;
+        --text-secondary: #4a5568;
+        --text-muted: #a0aec0;
+        --accent: #ff6b35;
+        --accent-soft: #ff6b3515;
+        --up-color: #dc2626;
+        --down-color: #16a34a;
+        --up-bg: #dc262610;
+        --down-bg: #16a34a10;
+        --warning-color: #d97706;
+        --info-color: #2563eb;
+        --sidebar-bg: #f1f3f5;
+        --sidebar-border: #e2e8f0;
+        --table-header-bg: #f1f3f5;
+        --table-header-color: #ff6b35;
+        --table-row-hover: #f8f9fb;
+        --input-bg: #ffffff;
+        --input-border: #d1d5db;
+        --tab-bg: #f1f3f5;
+        --shadow: 0 1px 3px rgba(0,0,0,0.08);
+        --shadow-hover: 0 4px 12px rgba(0,0,0,0.1);
+        """
+        bg_gradient = "linear-gradient(180deg, #f8f9fb 0%, #eef1f5 100%)"
+        sidebar_gradient = "linear-gradient(180deg, #f1f3f5 0%, #e8ecf0 100%)"
+    
+    # 注入主题 CSS
+    themed_css = GLOBAL_CSS.replace(
+        "/* ========== 浅色主题（默认） ========== */\n    :root, :root[data-theme=\"light\"] {",
+        f":root {{"
+    ).replace(
+        "    /* ========== 深色主题 ========== */\n    :root[data-theme=\"dark\"] {",
+        "    /* dark theme vars removed - using Python injection */\n    .unused {"
+    )
+    # 直接注入带变量的 CSS
+    final_css = f"""
+    <style>
+    :root {{
+        {css_vars}
+    }}
+    /* ========== 全局背景 ========== */
+    .stApp {{
+        background: var(--bg-primary);
+        color: var(--text-primary);
+    }}
+    [data-testid="stHeader"] {{ background: transparent !important; }}
+    /* ========== 侧边栏 ========== */
+    [data-testid="stSidebar"] {{
+        background: var(--sidebar-bg);
+        border-right: 1px solid var(--sidebar-border);
+    }}
+    [data-testid="stSidebar"] [data-testid="stMarkdown"] {{ color: var(--text-secondary); }}
+    [data-testid="stSidebar"] .stButton button {{
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 8px;
+        color: var(--text-primary);
+        transition: all 0.2s ease;
+    }}
+    [data-testid="stSidebar"] .stButton button:hover {{
+        border-color: var(--accent);
+        box-shadow: 0 0 12px var(--border-glow);
+    }}
+    /* ========== A股配色 ========== */
+    [data-testid="stMetricDelta"] [data-testid="stMetricDeltaIcon-Up"] svg {{ color: var(--up-color) !important; }}
+    [data-testid="stMetricDelta"] [data-testid="stMetricDeltaIcon-Down"] svg {{ color: var(--down-color) !important; }}
+    [data-testid="stMetricDelta"] div[data-testid="stMetricDeltaIcon-Up"] + span {{ color: var(--up-color) !important; }}
+    [data-testid="stMetricDelta"] div[data-testid="stMetricDeltaIcon-Down"] + span {{ color: var(--down-color) !important; }}
+    /* ========== Metric 卡片 ========== */
+    [data-testid="stMetric"] {{
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 12px 16px;
+        box-shadow: var(--shadow);
+    }}
+    [data-testid="stMetric"]:hover {{ border-color: var(--accent); box-shadow: var(--shadow-hover); }}
+    [data-testid="stMetric"] label {{ color: var(--text-secondary) !important; font-size: 0.78em !important; }}
+    [data-testid="stMetric"] [data-testid="stMetricValue"] {{ color: var(--text-primary) !important; font-weight: 700 !important; }}
+    /* ========== 标题 ========== */
+    h1 {{
+        background: linear-gradient(135deg, #ff6b35 0%, #ff8f60 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800 !important;
+    }}
+    h2, .stSubheader {{
+        color: var(--text-primary) !important;
+        font-weight: 700 !important;
+        border-bottom: 2px solid var(--border-color);
+        padding-bottom: 8px;
+        margin-top: 1.5rem !important;
+    }}
+    h3 {{ color: var(--text-secondary) !important; font-weight: 600 !important; }}
+    /* ========== 分割线 ========== */
+    hr {{
+        border: none;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+        margin: 1.5rem 0;
+    }}
+    /* ========== Tab ========== */
+    .stTabs [data-baseweb="tab-list"] {{
+        background: var(--tab-bg);
+        border-radius: 10px;
+        padding: 4px;
+        gap: 4px;
+        border: 1px solid var(--border-color);
+    }}
+    .stTabs [data-baseweb="tab"] {{ background: transparent; border-radius: 8px; color: var(--text-secondary); }}
+    .stTabs [aria-selected="true"] {{
+        background: linear-gradient(135deg, #ff6b35 0%, #e55a28 100%) !important;
+        color: #fff !important;
+    }}
+    .stTabs [data-baseweb="tab-highlight"],
+    .stTabs [data-baseweb="tab-border"] {{ display: none; }}
+    /* ========== 表格 ========== */
+    .stDataFrame {{ border-radius: 10px; overflow: hidden; border: 1px solid var(--border-color); }}
+    [data-testid="stDataFrame"] thead tr th {{
+        background: var(--table-header-bg) !important;
+        color: var(--table-header-color) !important;
+        font-weight: 600 !important;
+        border-bottom: 2px solid var(--accent) !important;
+    }}
+    [data-testid="stDataFrame"] tbody tr:hover {{ background: var(--table-row-hover) !important; }}
+    /* ========== 输入框 ========== */
+    .stTextInput input, .stNumberInput input, .stTextArea textarea {{
+        background: var(--input-bg) !important;
+        border-color: var(--input-border) !important;
+        color: var(--text-primary) !important;
+    }}
+    /* ========== 通用卡片 ========== */
+    .dash-card {{ background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 10px; padding: 16px; box-shadow: var(--shadow); }}
+    .dash-card-header {{ color: var(--text-secondary); font-size: 0.82em; }}
+    .dash-card-value {{ color: var(--text-primary); font-size: 1.1em; font-weight: 700; }}
+    .dash-card-sub {{ color: var(--text-secondary); font-size: 0.85em; }}
+    /* ========== 扫描/持仓卡片 ========== */
+    .scan-result-card, .position-card {{
+        background: var(--bg-card);
+        border: 1px solid var(--border-color);
+        border-radius: 10px;
+        padding: 14px 18px;
+        margin-bottom: 10px;
+        box-shadow: var(--shadow);
+    }}
+    .scan-result-card:hover, .position-card:hover {{ border-color: var(--accent); box-shadow: var(--shadow-hover); }}
+    .position-metric {{ text-align: center; }}
+    .position-metric-label {{ color: var(--text-secondary); font-size: 0.78em; }}
+    .position-metric-value {{ color: var(--text-primary); font-weight: 600; }}
+    /* ========== 标签 ========== */
+    .tag {{ display: inline-block; padding: 2px 10px; border-radius: 6px; font-size: 0.82em; font-weight: 600; }}
+    .tag-up {{ background: var(--up-bg); color: var(--up-color); }}
+    .tag-down {{ background: var(--down-bg); color: var(--down-color); }}
+    .tag-accent {{ background: var(--accent-soft); color: var(--accent); }}
+    .tag-info {{ background: color-mix(in srgb, var(--info-color) 15%, transparent); color: var(--info-color); }}
+    /* ========== 状态指示 ========== */
+    .status-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }}
+    .status-dot-on {{ background: var(--down-color); animation: pulse 2s infinite; }}
+    .status-dot-off {{ background: var(--up-color); }}
+    @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:0.5}} }}
+    /* ========== 隐藏元素 ========== */
+    #MainMenu, header, footer {{ visibility: hidden; }}
+    .stDeployButton {{ display: none; }}
+    .block-container {{ padding-top: 1rem; }}
+    /* ========== 滚动条 ========== */
+    ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
+    ::-webkit-scrollbar-track {{ background: var(--bg-primary); }}
+    ::-webkit-scrollbar-thumb {{ background: var(--border-color); border-radius: 3px; }}
+    ::-webkit-scrollbar-thumb:hover {{ background: var(--text-muted); }}
+    /* ========== 背景渐变 ========== */
+    .stApp {{ background: {bg_gradient}; }}
+    [data-testid="stSidebar"] {{ background: {sidebar_gradient}; }}
+    </style>
+    """
+    st.html(final_css)
+
+
+def render_theme_toggle():
+    """在右上角渲染主题切换按钮（用 JavaScript 精确定位，不影响其他按钮）"""
+    current = st.session_state.get("theme", "light")
+    is_dark = current == "dark"
+    icon = "☀️" if is_dark else "🌙"
+    tooltip = "切换到浅色模式" if is_dark else "切换到深色模式"
+    
+    if st.button(icon, key="theme_toggle_btn", help=tooltip, type="secondary"):
+        st.session_state["theme"] = "light" if is_dark else "dark"
+        st.rerun()
+    
+    # 用 JavaScript 精确定位按钮（找到包含主题图标的按钮）
+    st.html("""
+    <script>
+    function positionThemeBtn() {
+        // 找到所有按钮，找到包含主题图标的那个
+        const buttons = document.querySelectorAll('[data-testid="stButton"] button');
+        for (const btn of buttons) {
+            const text = btn.textContent.trim();
+            if (text === '☀️' || text === '🌙') {
+                btn.style.position = 'fixed';
+                btn.style.top = '12px';
+                btn.style.right = '24px';
+                btn.style.zIndex = '9999';
+                btn.style.width = '42px';
+                btn.style.height = '42px';
+                btn.style.borderRadius = '50%';
+                btn.style.padding = '0';
+                btn.style.fontSize = '1.3em';
+                btn.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+                btn.style.transition = 'all 0.3s ease';
+                btn.onmouseover = function() {
+                    this.style.borderColor = '#ff6b35';
+                    this.style.boxShadow = '0 0 16px rgba(255,107,53,0.25)';
+                    this.style.transform = 'scale(1.1)';
+                };
+                btn.onmouseout = function() {
+                    this.style.borderColor = '';
+                    this.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+                    this.style.transform = '';
+                };
+                break;
+            }
+        }
+    }
+    // 延迟执行，确保按钮已渲染
+    setTimeout(positionThemeBtn, 100);
+    </script>
+    """)
+
+
+def render_page_header(title: str, subtitle: str = ""):
+    """渲染统一的页面标题"""
+    st.html(f"""
+    <div style="padding: 8px 0 20px 0;">
+        <h1 style="margin:0; font-size:2em; line-height:1.1;">{title}</h1>
+        {"<p style='margin:6px 0 0 0; color:var(--text-secondary); font-size:0.88em;'>" + subtitle + "</p>" if subtitle else ""}
+    </div>
+    """)
+
+
+def render_metric_card(header: str, value: str, sub: str = "", color: str = "", border_color: str = ""):
+    """渲染自定义指标卡片"""
+    if not color:
+        color = "var(--text-primary)"
+    border_style = f"border-left:3px solid {border_color};" if border_color else ""
+    return f"""
+    <div class="dash-card" style="text-align:center; {border_style}">
+        <div class="dash-card-header">{header}</div>
+        <div class="dash-card-value" style="color:{color};">{value}</div>
+        {"<div class='dash-card-sub'>" + sub + "</div>" if sub else ""}
+    </div>
+    """
+
+
+def render_signal_card(code: str, name: str, price: str, signal_type: str = "", tags: str = "", border_color: str = "#ff6b35"):
+    """渲染信号卡片"""
+    return f"""
+    <div class="scan-result-card" style="border-left:4px solid {border_color};">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <div>
+                <span style="font-weight:700; color:var(--text-primary);">{code}</span>
+                <span style="color:var(--text-secondary); margin-left:8px;">{name}</span>
+                <span style="color:var(--accent); margin-left:12px; font-weight:600;">¥{price}</span>
+            </div>
+            <div>
+                {"<span class='tag tag-accent'>" + signal_type + "</span>" if signal_type else ""}
+                {"<span style='color:var(--text-secondary); font-size:0.85em;'>" + tags + "</span>" if tags else ""}
+            </div>
+        </div>
+    </div>
+    """
+
+
+def render_status_badge(running: bool, text_on: str = "运行中", text_off: str = "已停止"):
+    """渲染状态指示徽章"""
+    if running:
+        return f"""
+        <div style="background:var(--down-bg); border:1px solid color-mix(in srgb, var(--down-color) 25%, transparent); border-radius:10px; padding:10px 14px;">
+            <span class="status-dot status-dot-on"></span>
+            <span style="color:var(--down-color); font-weight:600;">{text_on}</span>
+        </div>
+        """
+    else:
+        return f"""
+        <div style="background:var(--up-bg); border:1px solid color-mix(in srgb, var(--up-color) 20%, transparent); border-radius:10px; padding:10px 14px;">
+            <span class="status-dot status-dot-off"></span>
+            <span style="color:var(--up-color); font-weight:600;">{text_off}</span>
+        </div>
+        """

@@ -3,36 +3,40 @@ import streamlit as st
 import json
 from core.strategies import STRATEGY_REGISTRY, get_strategy_names
 from core.db import save_strategy, get_strategies
+from core.ui import inject_global_css, render_theme_toggle, render_page_header
 
 st.set_page_config(page_title="策略配置", page_icon="⚙️", layout="wide")
-st.title("⚙️ 策略配置")
-st.caption("编辑策略参数、启用/禁用策略")
+inject_global_css()
+render_theme_toggle()
+render_page_header("⚙️ 策略配置", "编辑策略参数、启用/禁用策略")
 
 # 内置策略列表
-st.subheader("📋 内置策略")
+st.html('<h2 style="margin-top:0;">📋 内置策略</h2>')
 for key in get_strategy_names():
     info = STRATEGY_REGISTRY[key]
     with st.expander(f"📊 {info['name']} ({key})"):
-        st.markdown(f"**说明**: {info['desc']}")
-        st.markdown(f"**默认参数**:")
+        st.html(f"""
+        <div style="color:var(--text-secondary); line-height:1.8;">
+        <strong style="color:#ff6b35;">说明</strong>: {info['desc']}<br>
+        <strong style="color:#ff6b35;">默认参数</strong>:
+        </div>
+        """)
         st.json(info.get("default_params", {}))
 
 # 自定义策略配置
 st.divider()
-st.subheader("🛠️ 自定义策略参数")
+st.html('<h2>🛠️ 自定义策略参数</h2>')
 
-# 加载已保存的策略配置
 saved = get_strategies()
 saved_dict = {s["name"]: s for s in saved}
 
-# 编辑每个策略的参数
 for key in get_strategy_names():
     info = STRATEGY_REGISTRY[key]
     default_params = info.get("default_params", {})
     saved_params = saved_dict.get(key, {}).get("params", {})
 
     if default_params:
-        st.markdown(f"### {info['name']}")
+        st.html(f'<h3>{info["name"]}</h3>')
         params = {}
         cols = st.columns(len(default_params))
         for i, (pkey, pval) in enumerate(default_params.items()):
@@ -65,7 +69,7 @@ for key in get_strategy_names():
 
 # 回测预览
 st.divider()
-st.subheader("📈 策略回测预览")
+st.html('<h2>📈 策略回测预览</h2>')
 st.info("💡 选择一只股票，查看策略信号在历史数据上的表现")
 
 from core.data import get_stock_history
@@ -86,7 +90,6 @@ if st.button("运行回测") and test_code:
     if hist.empty:
         st.error("无法获取历史数据")
     else:
-        # 找出所有触发点
         strategy_info = STRATEGY_REGISTRY[test_strategy]
         func = strategy_info["func"]
         params = strategy_info.get("default_params", {})
@@ -100,12 +103,13 @@ if st.button("运行回测") and test_code:
             except:
                 pass
 
-        # 画图
         fig = go.Figure()
         fig.add_trace(go.Candlestick(
             x=hist["date"], open=hist["open"],
             high=hist["high"], low=hist["low"],
             close=hist["close"], name="K线",
+            increasing_line_color="#ef5350",
+            decreasing_line_color="#26a69a",
         ))
 
         if trigger_dates:
@@ -113,13 +117,18 @@ if st.button("运行回测") and test_code:
             fig.add_trace(go.Scatter(
                 x=trigger_dates, y=trigger_prices,
                 mode="markers", name="买入信号",
-                marker=dict(size=12, color="yellow", symbol="triangle-up"),
+                marker=dict(size=12, color="#ff6b35", symbol="triangle-up"),
             ))
 
         fig.update_layout(
             height=500, template="plotly_dark",
             title=f"{test_code} - {strategy_info['name']} 回测",
             xaxis_rangeslider_visible=False,
+            paper_bgcolor="#0a0e17",
+            plot_bgcolor="#0f1520",
+            font=dict(color="#c8cdd8"),
         )
-        st.plotly_chart(fig, use_container_width=True)
+        fig.update_xaxes(gridcolor="#1e2d40")
+        fig.update_yaxes(gridcolor="#1e2d40")
+        st.plotly_chart(fig, width='stretch')
         st.info(f"在过去250个交易日中，共触发 {len(trigger_dates)} 次信号")

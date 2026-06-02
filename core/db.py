@@ -52,6 +52,8 @@ def init_db():
                 strategy TEXT NOT NULL,
                 price REAL,
                 detail TEXT,
+                score REAL DEFAULT 0,
+                grade TEXT DEFAULT '',
                 triggered_at TEXT DEFAULT (datetime('now', 'localtime'))
             );
             CREATE TABLE IF NOT EXISTS alerts (
@@ -61,7 +63,31 @@ def init_db():
                 message TEXT,
                 sent_at TEXT DEFAULT (datetime('now', 'localtime'))
             );
+            CREATE TABLE IF NOT EXISTS portfolio (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                name TEXT NOT NULL,
+                buy_price REAL NOT NULL,
+                quantity INTEGER NOT NULL,
+                buy_date TEXT DEFAULT (date('now', 'localtime')),
+                stop_loss REAL DEFAULT 0,
+                target_price REAL DEFAULT 0,
+                notes TEXT DEFAULT '',
+                status TEXT DEFAULT 'holding',
+                sell_price REAL DEFAULT 0,
+                sell_date TEXT,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
         """)
+        # 迁移：给signals表添加score和grade字段（如果不存在）
+        try:
+            conn.execute("ALTER TABLE signals ADD COLUMN score REAL DEFAULT 0")
+        except:
+            pass  # 字段已存在
+        try:
+            conn.execute("ALTER TABLE signals ADD COLUMN grade TEXT DEFAULT ''")
+        except:
+            pass  # 字段已存在
 
 
 # ===== 自选股操作 =====
@@ -128,12 +154,12 @@ def get_strategies(enabled_only: bool = False) -> list[dict]:
 
 # ===== 信号记录 =====
 
-def save_signal(code: str, name: str, strategy: str, price: float, detail: str = ""):
+def save_signal(code: str, name: str, strategy: str, price: float, detail: str = "", score: float = 0, grade: str = ""):
     """保存策略触发信号"""
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO signals (code, name, strategy, price, detail) VALUES (?, ?, ?, ?, ?)",
-            (code, name, strategy, price, detail)
+            "INSERT INTO signals (code, name, strategy, price, detail, score, grade) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (code, name, strategy, price, detail, score, grade)
         )
 
 
@@ -161,3 +187,64 @@ def save_alert(code: str, alert_type: str, message: str):
             "INSERT INTO alerts (code, alert_type, message) VALUES (?, ?, ?)",
             (code, alert_type, message)
         )
+
+
+# ===== 持仓管理 =====
+
+def add_position(code: str, name: str, buy_price: float, quantity: int,
+                 stop_loss: float = 0, target_price: float = 0, notes: str = "") -> int:
+    """添加持仓"""
+    with get_db() as conn:
+        cursor = conn.execute(
+            """INSERT INTO portfolio (code, name, buy_price, quantity, stop_loss, target_price, notes)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (code, name, buy_price, quantity, stop_loss, target_price, notes)
+        )
+        return cursor.lastrowid
+
+
+def update_position(position_id: int, **kwargs):
+    """更新持仓信息"""
+    allowed = {"buy_price", "quantity", "stop_loss", "target_price", "notes", "status",
+               "sell_price", "sell_date"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [position_id]
+    with get_db() as conn:
+        conn.execute(f"UPDATE portfolio SET {set_clause} WHERE id = ?", values)
+
+
+def sell_position(position_id: int, sell_price: float):
+    """卖出持仓"""
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE portfolio SET status = 'sold', sell_price = ?, sell_date = date('now', 'localtime') WHERE id = ?",
+            (sell_price, position_id)
+        )
+
+
+def delete_position(position_id: int):
+    """删除持仓记录"""
+    with get_db() as conn:
+        conn.execute("DELETE FROM portfolio WHERE id = ?", (position_id,))
+
+
+def get_positions(status: str = "holding") -> list[dict]:
+    """获取持仓列表"""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM portfolio WHERE status = ? ORDER BY created_at DESC",
+            (status,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_all_positions() -> list[dict]:
+    """获取所有持仓（含已卖出）"""
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT * FROM portfolio ORDER BY status ASC, created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]

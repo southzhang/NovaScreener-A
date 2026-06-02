@@ -1,5 +1,6 @@
 """V10 完整策略引擎 — 七条件共振 + 波段回调 + 评分系统"""
 import numpy as np
+import pandas as pd
 from dataclasses import dataclass
 from typing import Optional
 
@@ -106,15 +107,8 @@ def crossunder(a, b):
 
 def calc_ma(close, window):
     """简单移动平均"""
-    close = np.asarray(close, dtype=float)
-    n = len(close)
-    result = np.empty(n, dtype=float)
-    result[:window-1] = np.nan
-    cumsum = np.cumsum(close)
-    result[window-1] = cumsum[window-1] / window
-    if n > window:
-        result[window:] = (cumsum[window:] - cumsum[:n-window]) / window
-    return result
+    s = pd.Series(close, dtype=float)
+    return s.rolling(window=window, min_periods=window).mean().values
 
 
 # ===== V10 七条件共振策略 =====
@@ -456,6 +450,13 @@ STRATEGY_REGISTRY = {
         "func": None,
         "default_params": {},
         "desc": "EMA20/50/120回调入场",
+        "is_v10": True,
+    },
+    "trend_swing": {
+        "name": "趋势波段",
+        "func": None,
+        "default_params": {},
+        "desc": "多头排列+回调支撑+缩量反弹+三层波段止盈",
         "is_v10": True,
     },
     "ma_cross": {

@@ -1,47 +1,59 @@
-"""选股扫描页面 — V10 + 经典策略 + 波段回调"""
+"""选股扫描页面 — V10 + 经典策略 + 波段回调 + 6维评分买入推荐 + 快捷操作"""
 import streamlit as st
 import pandas as pd
+import numpy as np
 from core.strategies import STRATEGY_REGISTRY, get_strategy_names
 from core.scanner import scan_market, scan_watchlist
 from core.alerts import send_batch_signals
-from core.db import get_signals
+from core.db import get_signals, add_watchlist, get_watchlist, add_position
+from core.data import get_stock_history, get_realtime_quote
+from core.recommend import generate_buy_recommendation, format_recommendation_card
+from core.ui import inject_global_css, render_theme_toggle, render_page_header
 
 st.set_page_config(page_title="选股扫描", page_icon="🔍", layout="wide")
-st.title("🔍 选股扫描")
-st.caption("V10全买入 · 波段回调 · 经典策略")
+inject_global_css()
+render_theme_toggle()
+render_page_header("🔍 选股扫描", "V10全买入 · 波段回调 · 经典策略 · 6维评分 · 买入推荐")
 
 # ===== V10 策略 =====
-st.subheader("🏆 V10 策略引擎")
+st.html('<h2 style="margin-top:0;">🏆 V10 策略引擎</h2>')
 
 with st.expander("📖 V10 策略详解", expanded=False):
-    st.markdown("""
-    **V10 全买入公式** — 七条件共振，宁缺毋滥：
-    
-    | 条件 | 说明 |
-    |------|------|
-    | 🏔️ 隧道多头 | 收盘价 > EMA(120) > EMA(200) |
-    | 📈 双线定式 | EMA(5) > EMA(20) 且上升 |
-    | ⚡ QW动能 | 自定义动量指标上升 |
-    | 📏 通道间距 | (EMA5-EMA20)/EMA20 > 0.8% |
-    | 🔊 放量 | 成交量 > 1.5x 5日均量 |
-    | 🔴 阳线 | 收盘 > 开盘 |
-    | 💪 强庄控盘 | 加权价格突变检测 |
-    | 📊 MACD金叉 | DIF(20,80) 上穿 DEA(9) |
-    
-    **信号分级：**
-    - 🔴 **全买入** = 所有条件满足（最强）
-    - 🟠 **强庄买** = 缺MACD金叉
-    - 🟡 **基础买** = 缺强庄信号
+    st.html("""
+    <div style="color:var(--text-secondary); line-height:1.8;">
+    <strong style="color:#ff6b35;">V10 全买入公式</strong> — 七条件共振，宁缺毋滥：<br><br>
+    <table style="width:100%; border-collapse:collapse;">
+    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">🏔️ 隧道多头</td><td style="color:var(--text-secondary);">收盘价 > EMA(120) > EMA(200)</td></tr>
+    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">📈 双线定式</td><td style="color:var(--text-secondary);">EMA(5) > EMA(20) 且上升</td></tr>
+    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">⚡ QW动能</td><td style="color:var(--text-secondary);">自定义动量指标上升</td></tr>
+    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">📏 通道间距</td><td style="color:var(--text-secondary);">(EMA5-EMA20)/EMA20 > 0.8%</td></tr>
+    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">🔊 放量</td><td style="color:var(--text-secondary);">成交量 > 1.5x 5日均量</td></tr>
+    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">🔴 阳线</td><td style="color:var(--text-secondary);">收盘 > 开盘</td></tr>
+    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">💪 强庄控盘</td><td style="color:var(--text-secondary);">加权价格突变检测</td></tr>
+    <tr><td style="padding:6px 0;">📊 MACD金叉</td><td style="color:var(--text-secondary);">DIF(20,80) 上穿 DEA(9)</td></tr>
+    </table>
+    <br>
+    <strong style="color:#ff6b35;">6维综合评分（100分制）：</strong><br>
+    V10信号级别 30分 | 基本面(ROE) 15分 | 资金面 20分 | 振幅分位 15分 | 板块风口 10分 | 追高风险 10分
+    <br><br>
+    <strong style="color:#ff6b35;">信号分级：</strong><br>
+    <span class="tag tag-up">🔴 全买入</span> 所有条件满足（最强）→ 强推80+分<br>
+    <span class="tag tag-accent">🟠 强庄买</span> 缺MACD金叉 → 关注60+分<br>
+    <span class="tag tag-info">🟡 基础买</span> 缺强庄信号 → 观察40+分
+    </div>
     """)
 
-col1, col2 = st.columns(2)
+col1, col2, col3 = st.columns(3)
 with col1:
     v10_enabled = st.checkbox("🏆 V10 全买入公式", value=True)
 with col2:
     pullback_enabled = st.checkbox("🔄 波段回调入场", value=False)
+with col3:
+    trend_swing_enabled = st.checkbox("📈 趋势波段", value=False,
+        help="多头排列+回调支撑+缩量反弹+三层波段止盈")
 
 # ===== 经典策略 =====
-st.subheader("📋 经典策略")
+st.html('<h2>📋 经典策略</h2>')
 classic_names = [k for k in get_strategy_names() if k not in ["v10_full", "pullback"]]
 
 selected_classic = []
@@ -74,15 +86,312 @@ if v10_enabled:
     all_selected.append("v10_full")
 if pullback_enabled:
     all_selected.append("pullback")
+if trend_swing_enabled:
+    all_selected.append("trend_swing")
 all_selected.extend(selected_classic)
 
 # 扫描范围
-st.subheader("🎯 扫描范围")
+st.html('<h2>🎯 扫描范围</h2>')
 scan_mode = st.radio("扫描范围", ["全市场", "自选股"], horizontal=True)
-max_workers = st.slider("并发线程数", 5, 20, 10)
 
-# 运行扫描
-if st.button("🚀 开始扫描", type="primary", use_container_width=True):
+
+def _render_recommendation(code, name, signal_type, score, change_pct=0):
+    """渲染单只股票的6维评分+买入推荐（紧凑版）"""
+    try:
+        hist = get_stock_history(code, days=250)
+        if hist.empty or len(hist) < 20:
+            return
+
+        close_arr = hist["close"].values.astype(np.float64)
+        high_arr = hist["high"].values.astype(np.float64)
+        low_arr = hist["low"].values.astype(np.float64)
+        vol_arr = hist["volume"].values.astype(np.float64)
+        open_arr = hist["open"].values.astype(np.float64)
+
+        from core.data import get_capital_flow, get_sector_score as calc_sector_score
+        flow_data = get_capital_flow(code)
+        capital_flow = flow_data.get("main_net_inflow", 0) if flow_data else 0
+        sector_score = calc_sector_score(code)
+
+        rec = generate_buy_recommendation(
+            code=code, name=name,
+            close=close_arr, high=high_arr, low=low_arr,
+            volume=vol_arr, open_price=open_arr,
+            signal_type=signal_type, score=score,
+            change_pct=change_pct,
+            capital_flow=capital_flow,
+            sector_score=sector_score,
+        )
+        if not rec:
+            return
+
+        # ---- 紧凑评分条 ----
+        dim_parts = []
+        for d in rec.dimensions:
+            pct = d.score / d.max_score if d.max_score > 0 else 0
+            if pct >= 0.8:
+                icon = "🟢"
+            elif pct >= 0.5:
+                icon = "🟡"
+            elif pct > 0:
+                icon = "🟠"
+            else:
+                icon = "⚪"
+            dim_parts.append(f"{icon}{d.name}{d.score:.0f}")
+        st.caption(" · ".join(dim_parts))
+
+        # ---- 核心指标一行（自定义HTML，7列紧凑布局）----
+        ts = rec.trailing_stop
+        loss_pct = (rec.current_price - rec.stop_loss) / rec.current_price * 100
+        gain1_pct = (rec.target_1 - rec.current_price) / rec.current_price * 100
+        rr_color = "#00c853" if rec.risk_reward >= 2.0 else "#ffab40" if rec.risk_reward >= 1.5 else "#ff4b4b"
+
+        st.html(f"""
+        <div style="display:flex; gap:8px; flex-wrap:wrap; padding:8px 0; font-size:0.82em;">
+            <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
+                <div style="color:var(--text-secondary); font-size:0.8em;">📊 总分</div>
+                <div style="font-weight:700; color:#ff6b35;">{rec.total_score}分</div>
+            </div>
+            <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
+                <div style="color:var(--text-secondary); font-size:0.8em;">🎯 入场</div>
+                <div style="font-weight:700;">¥{rec.entry_price}</div>
+            </div>
+            <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
+                <div style="color:var(--text-secondary); font-size:0.8em;">🛑 止损</div>
+                <div style="font-weight:700; color:#00c853;">¥{rec.stop_loss}</div>
+                <div style="color:#00c853; font-size:0.85em;">-{loss_pct:.1f}%</div>
+            </div>
+            <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
+                <div style="color:var(--text-secondary); font-size:0.8em;">📈 目标</div>
+                <div style="font-weight:700; color:#ff4b4b;">¥{rec.target_1}</div>
+                <div style="color:#ff4b4b; font-size:0.85em;">+{gain1_pct:.1f}%</div>
+            </div>
+            <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
+                <div style="color:var(--text-secondary); font-size:0.8em;">盈亏比</div>
+                <div style="font-weight:700; color:{rr_color};">{rec.risk_reward}:1</div>
+            </div>
+            <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
+                <div style="color:var(--text-secondary); font-size:0.8em;">💰 仓位</div>
+                <div style="font-weight:700;">{rec.position_pct}%</div>
+            </div>
+            <div style="flex:2; min-width:120px; text-align:left; background:var(--bg-card); border-radius:6px; padding:6px 8px;">
+                <div style="color:var(--text-secondary); font-size:0.8em;">💡 推荐理由</div>
+                <div style="font-size:0.85em; color:var(--text-secondary); line-height:1.3;">{rec.reason}</div>
+            </div>
+        </div>
+        """)
+
+        # ---- 风险提示 ----
+        st.caption(f"⚠️ {rec.risk_note}")
+
+    except Exception as e:
+        st.caption(f"⚠️ 推荐生成失败: {e}")
+
+
+def _render_stock_actions(code, name, price, stop_loss=0, target_price=0):
+    """渲染单只股票的操作按钮：加入盯盘 + 加入持仓"""
+    col_watch, col_hold, col_spacer = st.columns([1, 1, 4])
+
+    with col_watch:
+        if st.button("👁️ 加入盯盘", key=f"watch_{code}"):
+            existing = [w["code"] for w in get_watchlist()]
+            if code in existing:
+                st.toast(f"⚠️ {code} 已在盯盘列表中", icon="⚠️")
+            else:
+                add_watchlist(code, name)
+                st.toast(f"✅ {code} 已加入盯盘监控", icon="✅")
+
+    with col_hold:
+        with st.expander("💼 加入持仓"):
+            with st.form(key=f"hold_form_{code}", clear_on_submit=True):
+                st.markdown(f"**{code} — {name}**")
+                fcol1, fcol2 = st.columns(2)
+                with fcol1:
+                    buy_price = st.number_input(
+                        "买入价格", value=float(price), min_value=0.01,
+                        step=0.01, format="%.2f", key=f"bp_{code}"
+                    )
+                with fcol2:
+                    quantity = st.number_input(
+                        "买入数量（股）", value=100, min_value=100,
+                        step=100, key=f"qty_{code}"
+                    )
+                fcol3, fcol4 = st.columns(2)
+                with fcol3:
+                    sl = st.number_input(
+                        "止损价", value=float(stop_loss) if stop_loss else 0.0,
+                        min_value=0.0, step=0.01, format="%.2f", key=f"sl_{code}"
+                    )
+                with fcol4:
+                    tp = st.number_input(
+                        "目标价", value=float(target_price) if target_price else 0.0,
+                        min_value=0.0, step=0.01, format="%.2f", key=f"tp_{code}"
+                    )
+                notes = st.text_input("备注", "", key=f"notes_{code}")
+
+                if st.form_submit_button("✅ 确认添加", type="primary", width='stretch'):
+                    add_position(
+                        code=code, name=name,
+                        buy_price=buy_price, quantity=int(quantity),
+                        stop_loss=sl, target_price=tp, notes=notes,
+                    )
+                    st.toast(f"✅ {code} 已加入持仓：{int(quantity)}股 @ ¥{buy_price:.2f}", icon="💼")
+
+
+# ===== 结果渲染函数 =====
+def _render_results(results):
+    """渲染扫描结果（从session_state取或新扫描）"""
+    v10_results = [r for r in results if r.get("type") == "v10"]
+    pullback_results = [r for r in results if r.get("type") == "pullback"]
+    classic_results = [r for r in results if r.get("type") == "classic"]
+
+    if v10_results:
+        st.html('<h2>🏆 V10 信号 · 6维评分 · 买入推荐</h2>')
+        # 批量获取实时行情
+        _codes = [r['code'] for r in v10_results]
+        _quotes = {}
+        for _c in _codes:
+            _q = get_realtime_quote(_c)
+            if _q:
+                _quotes[_c] = _q
+        
+        for r in v10_results:
+            signal_type = r.get("signal_type", "基础买")
+            if signal_type == "全买入":
+                emoji = "🔴"
+                border_color = "#ff4b4b"
+            elif signal_type == "强庄买":
+                emoji = "🟠"
+                border_color = "#ffab40"
+            else:
+                emoji = "🟡"
+                border_color = "#42a5f5"
+
+            # 实时行情
+            _q = _quotes.get(r['code'], {})
+            _cur = _q.get('price', 0)
+            _pct = _q.get('pct_change', 0)
+            _pct_color = "#ef4444" if _pct > 0 else "#22c55e" if _pct < 0 else "var(--text-secondary)"
+            _pct_str = f"{_pct:+.2f}%" if _pct else "-"
+            _cur_str = f"¥{_cur:.2f}" if _cur else "-"
+
+            st.html(f"""
+            <div class="scan-result-card" style="border-left:4px solid {border_color};">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <div>
+                        <span style="font-size:1.2em; margin-right:4px;">{emoji}</span>
+                        <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{r['code']}</span>
+                        <span style="color:var(--text-secondary); margin-left:8px;">{r['name']}</span>
+                        <span style="color:#ff6b35; margin-left:12px; font-weight:600;">¥{r['price']}</span>
+                        <span style="color:var(--text-muted); margin-left:4px;">→</span>
+                        <span style="color:var(--text-primary); margin-left:4px; font-weight:600;">{_cur_str}</span>
+                        <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <span class="tag tag-accent">{signal_type}</span>
+                        <span style="color:#ff6b35; font-weight:700;">{r['score']}分</span>
+                        <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
+                    </div>
+                </div>
+            </div>
+            """)
+
+            _render_recommendation(
+                code=r["code"], name=r["name"],
+                signal_type=signal_type, score=r["score"],
+            )
+            _render_stock_actions(
+                code=r["code"], name=r["name"], price=r["price"],
+            )
+
+    if pullback_results:
+        st.html('<h2>🔄 波段回调机会 · 买入推荐</h2>')
+        _codes_pb = [r['code'] for r in pullback_results]
+        _quotes_pb = {}
+        for _c in _codes_pb:
+            _q = get_realtime_quote(_c)
+            if _q:
+                _quotes_pb[_c] = _q
+        
+        for r in pullback_results:
+            _q = _quotes_pb.get(r['code'], {})
+            _cur = _q.get('price', 0)
+            _pct = _q.get('pct_change', 0)
+            _pct_color = "#ef4444" if _pct > 0 else "#22c55e" if _pct < 0 else "var(--text-secondary)"
+            _pct_str = f"{_pct:+.2f}%" if _pct else "-"
+            _cur_str = f"¥{_cur:.2f}" if _cur else "-"
+
+            st.html(f"""
+            <div class="scan-result-card" style="border-left:4px solid #ab47bc;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <div>
+                        <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{r['code']}</span>
+                        <span style="color:var(--text-secondary); margin-left:8px;">{r['name']}</span>
+                        <span style="color:#ff6b35; margin-left:12px; font-weight:600;">¥{r['price']}</span>
+                        <span style="color:var(--text-muted); margin-left:4px;">→</span>
+                        <span style="color:var(--text-primary); margin-left:4px; font-weight:600;">{_cur_str}</span>
+                        <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <span class="tag tag-info">{r.get('level', '')}</span>
+                        <span style="color:#ff6b35; font-weight:700;">{r['score']}分</span>
+                        <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
+                    </div>
+                </div>
+            </div>
+            """)
+
+            _render_recommendation(
+                code=r["code"], name=r["name"],
+                signal_type="基础买", score=r["score"],
+            )
+            _render_stock_actions(
+                code=r["code"], name=r["name"], price=r["price"],
+            )
+
+    if classic_results:
+        st.html('<h2>📋 经典策略信号</h2>')
+        _codes_cl = [r['code'] for r in classic_results]
+        _quotes_cl = {}
+        for _c in _codes_cl:
+            _q = get_realtime_quote(_c)
+            if _q:
+                _quotes_cl[_c] = _q
+        
+        for r in classic_results:
+            tags_html = " ".join([f"<span class='tag tag-info'>{t}</span>" for t in r.get('tags', [])[:2]])
+            _q = _quotes_cl.get(r['code'], {})
+            _cur = _q.get('price', 0)
+            _pct = _q.get('pct_change', 0)
+            _pct_color = "#ef4444" if _pct > 0 else "#22c55e" if _pct < 0 else "var(--text-secondary)"
+            _pct_str = f"{_pct:+.2f}%" if _pct else "-"
+            _cur_str = f"¥{_cur:.2f}" if _cur else "-"
+
+            st.html(f"""
+            <div class="scan-result-card">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                    <div>
+                        <span style="font-weight:700; color:var(--text-primary);">{r['code']}</span>
+                        <span style="color:var(--text-secondary); margin-left:8px;">{r['name']}</span>
+                        <span style="color:#ff6b35; margin-left:12px;">¥{r['price']}</span>
+                        <span style="color:var(--text-muted); margin-left:4px;">→</span>
+                        <span style="color:var(--text-primary); margin-left:4px; font-weight:600;">{_cur_str}</span>
+                        <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
+                    </div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <span class="tag tag-accent">{r['strategy']}</span>
+                        {tags_html}
+                    </div>
+                </div>
+            </div>
+            """)
+            _render_stock_actions(
+                code=r["code"], name=r["name"], price=r["price"],
+            )
+
+
+# 运行扫描（结果存session_state，切页面不丢失）
+if st.button("🚀 开始扫描", type="primary", width='stretch'):
     if not all_selected:
         st.warning("请至少选择一个策略！")
     else:
@@ -98,83 +407,34 @@ if st.button("🚀 开始扫描", type="primary", use_container_width=True):
             if scan_mode == "自选股":
                 results = scan_watchlist(all_selected, params_dict)
             else:
-                results = scan_market(all_selected, params_dict, max_workers=max_workers, progress_callback=on_progress)
+                results = scan_market(all_selected, params_dict, max_workers=20, progress_callback=on_progress)
 
             progress_bar.progress(1.0)
             status_text.text("扫描完成！")
 
-        if results:
-            st.success(f"🎯 找到 {len(results)} 个信号！")
+        # 存入session_state
+        st.session_state["scan_results"] = results
+        st.rerun()
 
-            # V10 信号
-            v10_results = [r for r in results if r.get("type") == "v10"]
-            pullback_results = [r for r in results if r.get("type") == "pullback"]
-            classic_results = [r for r in results if r.get("type") == "classic"]
+# 显示结果（优先取session_state缓存）
+if "scan_results" in st.session_state and st.session_state["scan_results"]:
+    results = st.session_state["scan_results"]
+    st.success(f"🎯 共 {len(results)} 个信号（上次扫描结果）")
+    _render_results(results)
 
-            if v10_results:
-                st.subheader("🏆 V10 全买入信号")
-                for r in v10_results:
-                    signal_type = r.get("signal_type", "")
-                    if signal_type == "全买入":
-                        emoji = "🔴"
-                    elif signal_type == "强庄买":
-                        emoji = "🟠"
-                    else:
-                        emoji = "🟡"
-                    
-                    cols = st.columns([1, 2, 1, 1, 2])
-                    with cols[0]:
-                        st.markdown(f"**{emoji} {r['code']}**")
-                    with cols[1]:
-                        st.markdown(f"**{r['name']}** — ¥{r['price']}")
-                    with cols[2]:
-                        st.markdown(f"`{signal_type}`")
-                    with cols[3]:
-                        st.markdown(f"**{r['score']}分**")
-                    with cols[4]:
-                        st.markdown(" ".join(r['tags'][:4]))
-
-            if pullback_results:
-                st.subheader("🔄 波段回调机会")
-                for r in pullback_results:
-                    cols = st.columns([1, 2, 1, 1, 2])
-                    with cols[0]:
-                        st.markdown(f"**{r['code']}**")
-                    with cols[1]:
-                        st.markdown(f"**{r['name']}** — ¥{r['price']}")
-                    with cols[2]:
-                        st.markdown(f"`{r.get('level', '')}`")
-                    with cols[3]:
-                        st.markdown(f"**{r['score']}分**")
-                    with cols[4]:
-                        st.markdown(" ".join(r['tags'][:4]))
-
-            if classic_results:
-                st.subheader("📋 经典策略信号")
-                df = pd.DataFrame(classic_results)
-                st.dataframe(df[["code", "name", "strategy", "price"]], use_container_width=True, hide_index=True)
-
-            # 发送飞书
-            if st.button("📤 发送到飞书"):
-                signal_dicts = []
-                for r in results:
-                    signal_dicts.append({
-                        "code": r["code"], "name": r["name"],
-                        "strategy": r["strategy"], "price": r["price"],
-                    })
-                if send_batch_signals(signal_dicts):
-                    st.success("已发送到飞书！")
-                else:
-                    st.warning("发送失败，请检查Webhook配置")
+    # 发送飞书
+    if st.button("📤 发送到飞书"):
+        signal_dicts = []
+        for r in results:
+            signal_dicts.append({
+                "code": r["code"], "name": r["name"],
+                "strategy": r["strategy"], "price": r["price"],
+            })
+        if send_batch_signals(signal_dicts):
+            st.success("已发送到飞书！")
         else:
-            st.info("未找到符合条件的股票")
+            st.warning("发送失败，请检查Webhook配置")
 
-# 历史信号
+# 快速入口
 st.divider()
-st.subheader("📜 历史信号")
-signals = get_signals(limit=50)
-if signals:
-    df = pd.DataFrame(signals)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-else:
-    st.info("暂无历史信号")
+st.info("💡 扫描结果中每只股票都有 **👁️ 加入盯盘** 和 **💼 加入持仓** 按钮，可直接操作。持仓管理页面支持实时行情同步、三层止盈止损、飞书止损提醒。")
