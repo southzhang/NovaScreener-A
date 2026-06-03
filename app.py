@@ -12,6 +12,7 @@ from core.scorer import score_stock, score_batch
 from core.monitor import get_monitor, start_monitoring, stop_monitoring
 from core.alerts import send_feishu_card, send_batch_signals
 from core.ui import inject_global_css, render_theme_toggle
+from version import VERSION, check_update
 
 # 初始化
 load_dotenv()
@@ -57,6 +58,40 @@ with st.sidebar:
     if st.button("🔄 刷新数据", width='stretch'):
         st.cache_data.clear()
         st.rerun()
+    
+    st.divider()
+    # ===== 版本信息 =====
+    _v_col1, _v_col2 = st.columns([1, 3])
+    with _v_col1:
+        st.caption(f"**{VERSION}**")
+    with _v_col2:
+        _update_key = "_update_checked"
+        if _update_key not in st.session_state:
+            st.session_state[_update_key] = check_update()
+        
+        _vr = st.session_state[_update_key]
+        if _vr["has_update"]:
+            if st.button(f"⬆️ 更新至 {_vr['latest']}", type="primary", use_container_width=True):
+                with st.status("更新中...", expanded=True) as status:
+                    st.write("拉取最新代码...")
+                    import subprocess, os
+                    r = subprocess.run(
+                        ["git", "pull"],
+                        capture_output=True, text=True, timeout=30,
+                        cwd=os.path.dirname(__file__),
+                    )
+                    if r.returncode == 0:
+                        status.update(label=f"✅ 更新成功！重启中...", state="complete")
+                        st.session_state.pop(_update_key, None)
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        status.update(label=f"❌ 更新失败", state="error")
+                        st.error(r.stderr or r.stdout)
+        elif _vr["error"]:
+            st.caption("⚠️ 无法检查更新")
+        else:
+            st.caption("✅ 已是最新")
 
 # ===== 主页面 =====
 # 主题切换按钮（右上角）
