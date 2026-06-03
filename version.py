@@ -9,12 +9,32 @@ _GITHUB_HEADERS = {
 }
 
 
+def _get_github_token() -> str | None:
+    """优先从环境变量获取 GitHub Token，避免限流"""
+    import os
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    # 也尝试从 gh CLI 缓存读取
+    if not token:
+        try:
+            import subprocess
+            token = subprocess.run(
+                ["gh", "auth", "token"], capture_output=True, text=True, timeout=5
+            ).stdout.strip()
+        except Exception:
+            pass
+    return token
+
+
 def get_latest_release() -> dict | None:
     """从 GitHub API 获取最新 release 信息"""
     import requests
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+    headers = dict(_GITHUB_HEADERS)
+    token = _get_github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     try:
-        resp = requests.get(url, timeout=5, headers=_GITHUB_HEADERS)
+        resp = requests.get(url, timeout=5, headers=headers)
         if resp.status_code == 200:
             data = resp.json()
             return {
