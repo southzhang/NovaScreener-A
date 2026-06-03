@@ -1,15 +1,20 @@
 """V10 量化盯盘选股 — 版本管理"""
-
-VERSION = "v1.0.0"
+VERSION = "v1.1.0"
 REPO_OWNER = "southzhang"
 REPO_NAME = "NovaScreener-A"
+
+_GITHUB_HEADERS = {
+    "User-Agent": "NovaScreener-A/1.1.0",
+    "Accept": "application/vnd.github.v3+json",
+}
+
 
 def get_latest_release() -> dict | None:
     """从 GitHub API 获取最新 release 信息"""
     import requests
     url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
     try:
-        resp = requests.get(url, timeout=5)
+        resp = requests.get(url, timeout=5, headers=_GITHUB_HEADERS)
         if resp.status_code == 200:
             data = resp.json()
             return {
