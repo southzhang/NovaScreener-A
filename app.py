@@ -100,7 +100,7 @@ render_theme_toggle()
 st.html("""
 <div style="padding: 10px 0 20px 0;">
     <h2 style="margin:0; color:#ff6b35; font-size: 1.8em;">📊 V10 量化盯盘选股</h2>
-    <p style="margin:5px 0 0 0; color:#888; font-size: 0.95em;">维加斯V10强庄策略 · 七条件共振 · 波段回调 · 多维评分 · 盯盘监控</p>
+    <p style="margin:5px 0 0 0; color:var(--text-secondary); font-size: 0.95em;">维加斯V10强庄策略 · 七条件共振 · 波段回调 · 多维评分 · 盯盘监控</p>
 </div>
 """)
 
@@ -396,7 +396,16 @@ if positions:
             })
     
     if pos_data:
-        st.dataframe(pd.DataFrame(pos_data), width='stretch', hide_index=True)
+        # 强制浅色下 DataFrame 单元格白底黑字
+        _df = pd.DataFrame(pos_data)
+        st.dataframe(
+            _df.style.set_table_styles([
+                {"selector": "th", "props": [("background", "var(--table-header-bg)"), ("color", "var(--table-header-color)"), ("font-weight", "600")]},
+                {"selector": "td", "props": [("background", "var(--bg-card)"), ("color", "var(--text-primary)")]},
+                {"selector": "tr:hover td", "props": [("background", "var(--table-row-hover)")]},
+            ]),
+            width='stretch', hide_index=True,
+        )
     else:
         st.warning("无法获取持仓数据")
 else:

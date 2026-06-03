@@ -10,11 +10,11 @@ GLOBAL_CSS = """
         --bg-secondary: #ffffff;
         --bg-card: #ffffff;
         --bg-card-hover: #f0f2f5;
-        --border-color: #e2e8f0;
+        --border-color: #d0d7e2;
         --border-glow: #ff6b3520;
-        --text-primary: #1a202c;
-        --text-secondary: #4a5568;
-        --text-muted: #a0aec0;
+        --text-primary: #0f1419;
+        --text-secondary: #1a365d;
+        --text-muted: #42526b;
         --accent: #ff6b35;
         --accent-soft: #ff6b3515;
         --up-color: #dc2626;
@@ -24,12 +24,12 @@ GLOBAL_CSS = """
         --warning-color: #d97706;
         --info-color: #2563eb;
         --sidebar-bg: #f1f3f5;
-        --sidebar-border: #e2e8f0;
+        --sidebar-border: #d0d7e2;
         --table-header-bg: #f1f3f5;
         --table-header-color: #ff6b35;
         --table-row-hover: #f8f9fb;
         --input-bg: #ffffff;
-        --input-border: #d1d5db;
+        --input-border: #c4cad5;
         --tab-bg: #f1f3f5;
         --shadow: 0 1px 3px rgba(0,0,0,0.08);
         --shadow-hover: 0 4px 12px rgba(0,0,0,0.1);
@@ -43,9 +43,9 @@ GLOBAL_CSS = """
         --bg-card-hover: #1f2b3d;
         --border-color: #2a3a4e;
         --border-glow: #ff6b3540;
-        --text-primary: #e8eaf0;
-        --text-secondary: #8892a4;
-        --text-muted: #5a6577;
+        --text-primary: #f0f4f8;
+        --text-secondary: #c8d0dc;
+        --text-muted: #8892a4;
         --up-color: #ff4b4b;
         --down-color: #00c853;
         --up-bg: #ff4b4b15;
@@ -58,7 +58,7 @@ GLOBAL_CSS = """
         --table-header-color: #ff6b35;
         --table-row-hover: #1f2b3d;
         --input-bg: #1a2332;
-        --input-border: #2a3a4e;
+        --input-border: #3a4e66;
         --tab-bg: #111827;
         --shadow: 0 1px 3px rgba(0,0,0,0.3);
         --shadow-hover: 0 4px 12px rgba(0,0,0,0.4);
@@ -108,20 +108,22 @@ GLOBAL_CSS = """
     [data-testid="stMetric"] [data-testid="stMetricValue"] { color: var(--text-primary) !important; font-weight: 700 !important; }
 
     /* ========== 标题 ========== */
+    h1, h2, h3 {
+        color: var(--text-primary) !important;
+    }
     h1 {
         background: linear-gradient(135deg, #ff6b35 0%, #ff8f60 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-weight: 800 !important;
     }
-    h2, .stSubheader {
-        color: var(--text-primary) !important;
+    h2 {
         font-weight: 700 !important;
         border-bottom: 2px solid var(--border-color);
         padding-bottom: 8px;
         margin-top: 1.5rem !important;
     }
-    h3 { color: var(--text-secondary) !important; font-weight: 600 !important; }
+    h3 { font-weight: 600 !important; }
 
     /* ========== 分割线 ========== */
     hr {
@@ -237,9 +239,9 @@ def inject_global_css():
         --bg-card-hover: #1f2b3d;
         --border-color: #2a3a4e;
         --border-glow: #ff6b3540;
-        --text-primary: #e8eaf0;
-        --text-secondary: #8892a4;
-        --text-muted: #5a6577;
+        --text-primary: #f0f4f8;
+        --text-secondary: #c8d0dc;
+        --text-muted: #8892a4;
         --accent: #ff6b35;
         --accent-soft: #ff6b3515;
         --up-color: #ff4b4b;
@@ -254,7 +256,7 @@ def inject_global_css():
         --table-header-color: #ff6b35;
         --table-row-hover: #1f2b3d;
         --input-bg: #1a2332;
-        --input-border: #2a3a4e;
+        --input-border: #3a4e66;
         --tab-bg: #111827;
         --shadow: 0 1px 3px rgba(0,0,0,0.3);
         --shadow-hover: 0 4px 12px rgba(0,0,0,0.4);
@@ -267,11 +269,11 @@ def inject_global_css():
         --bg-secondary: #ffffff;
         --bg-card: #ffffff;
         --bg-card-hover: #f0f2f5;
-        --border-color: #e2e8f0;
+        --border-color: #d0d7e2;
         --border-glow: #ff6b3520;
-        --text-primary: #1a202c;
-        --text-secondary: #4a5568;
-        --text-muted: #a0aec0;
+        --text-primary: #0f1419;
+        --text-secondary: #1a365d;
+        --text-muted: #42526b;
         --accent: #ff6b35;
         --accent-soft: #ff6b3515;
         --up-color: #dc2626;
@@ -281,12 +283,12 @@ def inject_global_css():
         --warning-color: #d97706;
         --info-color: #2563eb;
         --sidebar-bg: #f1f3f5;
-        --sidebar-border: #e2e8f0;
+        --sidebar-border: #d0d7e2;
         --table-header-bg: #f1f3f5;
         --table-header-color: #ff6b35;
         --table-row-hover: #f8f9fb;
         --input-bg: #ffffff;
-        --input-border: #d1d5db;
+        --input-border: #c4cad5;
         --tab-bg: #f1f3f5;
         --shadow: 0 1px 3px rgba(0,0,0,0.08);
         --shadow-hover: 0 4px 12px rgba(0,0,0,0.1);
@@ -348,20 +350,20 @@ def inject_global_css():
     [data-testid="stMetric"] label {{ color: var(--text-secondary) !important; font-size: 0.78em !important; }}
     [data-testid="stMetric"] [data-testid="stMetricValue"] {{ color: var(--text-primary) !important; font-weight: 700 !important; }}
     /* ========== 标题 ========== */
+    h1, h2, h3 {{ color: var(--text-primary) !important; }}
     h1 {{
         background: linear-gradient(135deg, #ff6b35 0%, #ff8f60 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-weight: 800 !important;
     }}
-    h2, .stSubheader {{
-        color: var(--text-primary) !important;
+    h2 {{
         font-weight: 700 !important;
         border-bottom: 2px solid var(--border-color);
         padding-bottom: 8px;
         margin-top: 1.5rem !important;
     }}
-    h3 {{ color: var(--text-secondary) !important; font-weight: 600 !important; }}
+    h3 {{ font-weight: 600 !important; }}
     /* ========== 分割线 ========== */
     hr {{
         border: none;
