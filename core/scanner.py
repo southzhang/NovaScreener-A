@@ -1,5 +1,6 @@
 """V10 全市场扫描器 — 多策略 + 多线程 + 过滤"""
 import numpy as np
+import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from .data import get_stock_list, get_stock_history, get_realtime_quote, get_capital_flow
 from .strategies import (
@@ -208,22 +209,24 @@ def scan_watchlist(strategy_keys: list[str], params_dict: dict[str, dict] | None
     return scan_market(strategy_keys, params_dict, stock_pool=codes)
 
 
-def get_market_overview() -> dict:
-    """获取市场概览"""
-    all_stocks = get_stock_list()
-    if all_stocks.empty:
+def get_market_overview(df: pd.DataFrame | None = None) -> dict:
+    """获取市场概览（接收已拉取的DataFrame，避免重复请求）"""
+    if df is None:
+        from .data import get_stock_list
+        df = get_stock_list()
+    if df.empty:
         return {}
 
-    up_count = len(all_stocks[all_stocks["pct_change"] > 0])
-    down_count = len(all_stocks[all_stocks["pct_change"] < 0])
-    limit_up = len(all_stocks[all_stocks["pct_change"] >= 9.9])
-    limit_down = len(all_stocks[all_stocks["pct_change"] <= -9.9])
+    up_count = len(df[df["pct_change"] > 0])
+    down_count = len(df[df["pct_change"] < 0])
+    limit_up = len(df[df["pct_change"] >= 9.9])
+    limit_down = len(df[df["pct_change"] <= -9.9])
 
     return {
-        "total": len(all_stocks),
+        "total": len(df),
         "up": up_count,
         "down": down_count,
         "limit_up": limit_up,
         "limit_down": limit_down,
-        "up_ratio": round(up_count / len(all_stocks) * 100, 1) if len(all_stocks) > 0 else 0,
+        "up_ratio": round(up_count / len(df) * 100, 1) if len(df) > 0 else 0,
     }

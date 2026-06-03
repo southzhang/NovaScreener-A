@@ -502,17 +502,19 @@ def get_fundamental(code: str) -> dict | None:
 
 # ===== 排行榜 =====
 
-def get_top_gainers(limit: int = 20) -> pd.DataFrame:
-    """涨幅榜"""
-    df = get_stock_list()
+def get_top_gainers(limit: int = 20, df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """涨幅榜（接收已拉取的DataFrame，避免重复请求）"""
+    if df is None:
+        df = get_stock_list()
     if df.empty:
         return df
     return df.nlargest(limit, "pct_change")
 
 
-def get_top_losers(limit: int = 20) -> pd.DataFrame:
-    """跌幅榜"""
-    df = get_stock_list()
+def get_top_losers(limit: int = 20, df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """跌幅榜（接收已拉取的DataFrame，避免重复请求）"""
+    if df is None:
+        df = get_stock_list()
     if df.empty:
         return df
     return df.nsmallest(limit, "pct_change")

@@ -69,9 +69,10 @@ st.html("""
 </div>
 """)
 
-# 市场概览（红涨绿跌）
+# 市场概览（红涨绿跌）— 只拉一次全市场数据，三个模块共享
 st.subheader("🏛️ 市场概览")
-overview = get_market_overview()
+_df_market = get_stock_list()  # 只拉一次！
+overview = get_market_overview(df=_df_market)
 
 _mkt_html = f"""
 <div style="display:flex; gap:12px; flex-wrap:wrap;">
@@ -137,7 +138,7 @@ tab1, tab2 = st.tabs(["🔴 涨幅榜", "🟢 跌幅榜"])
 
 with tab1:
     try:
-        gainers = get_top_gainers(15)
+        gainers = get_top_gainers(15, df=_df_market)
         if not gainers.empty:
             gainers_display = gainers[["code", "name", "price", "pct_change", "turnover"]].copy()
             gainers_display.columns = ["代码", "名称", "现价", "涨跌幅", "换手率"]
@@ -160,7 +161,7 @@ with tab1:
 
 with tab2:
     try:
-        losers = get_top_losers(15)
+        losers = get_top_losers(15, df=_df_market)
         if not losers.empty:
             losers_display = losers[["code", "name", "price", "pct_change", "turnover"]].copy()
             losers_display.columns = ["代码", "名称", "现价", "涨跌幅", "换手率"]
@@ -186,6 +187,9 @@ st.subheader("🎯 最近策略信号")
 signals = get_signals(limit=50)
 if signals:
     df_signals = pd.DataFrame(signals)
+    # 只显示今天的信号
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    df_signals = df_signals[df_signals["triggered_at"].str.startswith(today_str, na=False)]
     df_signals = df_signals.sort_values("triggered_at", ascending=False).drop_duplicates(subset=["code"], keep="first").head(15)
     cols = ["code", "name", "strategy", "price", "score", "grade", "triggered_at"]
     for c in cols:
