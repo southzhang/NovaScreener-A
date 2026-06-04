@@ -144,16 +144,19 @@ if watchlist:
                 row=2, col=1,
             )
 
+            # 根据主题选择图表配色
+            _is_dark = st.session_state.get("theme", "light") == "dark"
             fig.update_layout(
                 height=600, xaxis_rangeslider_visible=False,
-                template="plotly_dark", showlegend=True,
+                template="plotly_dark" if _is_dark else "plotly_white", showlegend=True,
                 margin=dict(l=50, r=50, t=30, b=30),
-                paper_bgcolor="#0a0e17",
-                plot_bgcolor="#0f1520",
-                font=dict(color="#c8cdd8"),
+                paper_bgcolor="#0a0e17" if _is_dark else "#ffffff",
+                plot_bgcolor="#0f1520" if _is_dark else "#f8f9fb",
+                font=dict(color="#c8cdd8" if _is_dark else "#0f1419"),
             )
-            fig.update_xaxes(type="category", nticks=20, gridcolor="#1e2d40")
-            fig.update_yaxes(gridcolor="#1e2d40")
+            _grid = "#1e2d40" if _is_dark else "#e2e8f0"
+            fig.update_xaxes(type="category", nticks=20, gridcolor=_grid)
+            fig.update_yaxes(gridcolor=_grid)
             st.plotly_chart(fig, width='stretch')
         else:
             st.warning("无法获取K线数据")

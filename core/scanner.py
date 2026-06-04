@@ -16,8 +16,8 @@ def scan_single_stock(code: str, name: str, strategy_keys: list[str], params_dic
     results = []
 
     try:
-        # 获取K线数据（V10需要200+根）
-        df = get_stock_history(code, days=350)
+        # 获取K线数据（V10需要200+根，250够用）
+        df = get_stock_history(code, days=250)
         if df.empty or len(df) < 50:
             return results
 
@@ -135,7 +135,10 @@ def scan_market(
     progress_callback=None,
     apply_filters: bool = True,
 ) -> list[dict]:
-    """全市场扫描
+    """全市场扫描（粗筛+精扫）
+    
+    粗筛：用实时行情过滤低成交额/低价/ST股，大幅减少K线拉取量
+    精扫：只对粗筛通过的股票拉K线做策略分析
     
     Args:
         strategy_keys: 策略列表
@@ -149,19 +152,36 @@ def scan_market(
         params_dict = {}
 
     # 获取股票池
+    all_stocks = get_stock_list()
+    if all_stocks.empty:
+        return []
+
     if stock_pool:
+        # 指定股票池：只保留指定的
         codes = stock_pool
-        names = {code: "" for code in codes}
-        all_stocks = get_stock_list()
-        if not all_stocks.empty:
-            name_map = dict(zip(all_stocks["code"], all_stocks["name"]))
-            names = {code: name_map.get(code, "") for code in codes}
+        names = dict(zip(all_stocks["code"], all_stocks["name"]))
+        names = {c: names.get(c, "") for c in codes}
     else:
-        all_stocks = get_stock_list()
-        if all_stocks.empty:
-            return []
         codes = all_stocks["code"].tolist()
         names = dict(zip(all_stocks["code"], all_stocks["name"]))
+
+    # 粗筛：基于实时行情快速过滤（不做K线请求）
+    if not stock_pool and apply_filters and len(codes) > 500:
+        pre = all_stocks[all_stocks["code"].isin(codes)].copy()
+        # 过滤ST/退市
+        pre = pre[~pre["name"].str.contains("ST|退", na=False)]
+        # 过滤停牌（成交额=0）
+        pre = pre[pre["amount"] > 0]
+        # 过滤低价股
+        pre = pre[pre["price"] >= 5]
+        # 过滤低成交额（< 3000万）— V10需要活跃股
+        if "amount" in pre.columns:
+            pre = pre[pre["amount"] >= 3000]
+        # 按成交额排序取Top 600（足够覆盖V10候选，大幅减少K线请求）
+        pre = pre.nlargest(600, "amount")
+        codes = pre["code"].tolist()
+        names = dict(zip(pre["code"], pre["name"]))
+        print(f"[扫描] 粗筛: {len(all_stocks)} → {len(codes)} 只")
 
     # 过滤ST和退市股
     codes = [c for c in codes if "ST" not in names.get(c, "") and "退市" not in names.get(c, "")]

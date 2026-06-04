@@ -22,9 +22,9 @@ st.html('<h2 style="margin-top:0;">📊 监控状态</h2>')
 # 状态卡片
 status_items = [
     ("运行状态", "🟢 运行中" if status["running"] else "🔴 已停止", "#00c853" if status["running"] else "#ff4b4b"),
-    ("监控股票", f"{status['watchlist_count']}", "#e8eaf0"),
+    ("监控股票", f"{status['watchlist_count']}", "var(--text-primary)"),
     ("今日提醒", f"{status['alerts_sent']}", "#ff6b35"),
-    ("最后更新", status["last_update"], "#8892a4"),
+    ("最后更新", status["last_update"], "var(--text-muted)"),
 ]
 status_cols = st.columns(4)
 for col, (label, value, color) in zip(status_cols, status_items):

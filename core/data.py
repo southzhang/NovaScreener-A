@@ -55,7 +55,7 @@ def tencent_klines(code: str, days: int = 250) -> pd.DataFrame:
     url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{days},qfq"
 
     try:
-        resp = requests.get(url, timeout=15, headers=HEADERS)
+        resp = requests.get(url, timeout=5, headers=HEADERS)
         data = json.loads(resp.text)
         sec_data = data.get("data", {}).get(symbol, {})
         bars = sec_data.get("qfqday", []) or sec_data.get("day", [])
@@ -192,12 +192,15 @@ def get_realtime_quote(code: str) -> dict | None:
 
 
 def get_realtime_quotes_batch(codes: list[str]) -> list[dict]:
-    """批量获取实时行情"""
+    """批量获取实时行情（并行加速）"""
+    if not codes:
+        return []
     results = []
-    for code in codes:
-        quote = get_realtime_quote(code)
-        if quote:
-            results.append(quote)
+    with ThreadPoolExecutor(max_workers=min(len(codes), 10)) as pool:
+        quotes = pool.map(get_realtime_quote, codes)
+        for q in quotes:
+            if q:
+                results.append(q)
     return results
 
 
@@ -257,7 +260,7 @@ def _parse_tencent_realtime_batch(raw: str) -> list[dict]:
 
 
 def get_stock_list() -> pd.DataFrame:
-    """获取全市场A股列表（腾讯行情API批量拉取）"""
+    """获取全市场A股列表（腾讯行情API批量拉取，并行加速）"""
     cache_key = "stock_list"
     cached = _get_cached(cache_key)
     if cached is not None and isinstance(cached, pd.DataFrame):
@@ -280,19 +283,23 @@ def get_stock_list() -> pd.DataFrame:
     for i in range(688000, 690000):
         tc_codes.append(f"sh{i:06d}")
 
-    # 批量拉取（每批80个）
-    batch_size = 80
-    for i in range(0, len(tc_codes), batch_size):
-        batch = tc_codes[i:i + batch_size]
-        qs = ",".join(batch)
+    # 批量拉取（每批200个，并行15线程加速）
+    batch_size = 200
+    batches = [tc_codes[i:i + batch_size] for i in range(0, len(tc_codes), batch_size)]
+
+    def _fetch_batch(batch_codes):
+        qs = ",".join(batch_codes)
         url = f"https://qt.gtimg.cn/q={qs}"
         try:
-            resp = requests.get(url, timeout=15, headers=HEADERS)
-            raw = resp.text
-            parsed = _parse_tencent_realtime_batch(raw)
-            all_stocks.extend(parsed)
+            resp = requests.get(url, timeout=10, headers=HEADERS)
+            return _parse_tencent_realtime_batch(resp.text)
         except Exception:
-            continue
+            return []
+
+    with ThreadPoolExecutor(max_workers=15) as pool:
+        results = pool.map(_fetch_batch, batches)
+        for parsed in results:
+            all_stocks.extend(parsed)
 
     if not all_stocks:
         # 降级到备用池

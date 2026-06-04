@@ -109,11 +109,11 @@ else:
 
     sum_cols = st.columns(5)
     sum_items = [
-        ("📦 持仓数", f"{len(positions)}只", "#e8eaf0", ""),
-        ("💰 总成本", f"¥{total_cost:,.0f}", "#e8eaf0", ""),
-        ("📈 总市值", f"¥{total_value:,.0f}", "#e8eaf0", ""),
+        ("📦 持仓数", f"{len(positions)}只", "var(--text-primary)", ""),
+        ("💰 总成本", f"¥{total_cost:,.0f}", "var(--text-primary)", ""),
+        ("📈 总市值", f"¥{total_value:,.0f}", "var(--text-primary)", ""),
         ("💹 总盈亏", f"¥{total_pnl:+,.0f}", s_color, f"{s_arrow} {pnl_pct:+.2f}%"),
-        ("📊 盈亏比", f"{win_cnt}盈 / {lose_cnt}亏", "#e8eaf0", ""),
+        ("📊 盈亏比", f"{win_cnt}盈 / {lose_cnt}亏", "var(--text-primary)", ""),
     ]
     for col, (label, value, color, sub) in zip(sum_cols, sum_items):
         with col:
@@ -189,7 +189,7 @@ else:
         # 止损距离
         if stop_loss > 0:
             loss_from_stop = (current_price - stop_loss) / current_price * 100
-            stop_html = f"<span style='color:{('#ff4b4b' if loss_from_stop < 3 else '#8892a4')};'>¥{stop_loss} ({loss_from_stop:+.1f}%)</span>"
+            stop_html = f"<span style='color:{('#ff4b4b' if loss_from_stop < 3 else 'var(--text-muted)')};'>¥{stop_loss} ({loss_from_stop:+.1f}%)</span>"
         else:
             stop_html = "<span style='color:var(--text-muted);'>未设置</span>"
 
@@ -201,11 +201,11 @@ else:
 
         atr_html = f"<span style='color:var(--text-secondary);'>¥{trailing_info.atr_stop}</span>" if trailing_info else ""
 
-        risk_bg = "#ff4b4b10" if "触发" in risk_level else "#ffab4010" if "预警" in risk_level else "#00c85308"
-        risk_border = "#ff4b4b40" if "触发" in risk_level else "#ffab4040" if "预警" in risk_level else "#2a3a4e"
+        risk_bg = "#ff4b4b10" if "触发" in risk_level else "#ffab4010" if "预警" in risk_level else "var(--bg-card)"
+        risk_border = "#ff4b4b40" if "触发" in risk_level else "#ffab4040" if "预警" in risk_level else "var(--border-color)"
 
         st.html(f"""
-        <div class="position-card" style="border-color:{risk_border}; background: linear-gradient(135deg, #1a2332 0%, {risk_bg} 100%);">
+        <div class="position-card" style="border-color:{risk_border}; background: linear-gradient(135deg, var(--bg-card) 0%, {risk_bg} 100%);">
             <div class="position-card-header">
                 <div>
                     <span style="font-size:1.2em;">{'🔴' if pnl >= 0 else '🟢'}</span>
@@ -261,7 +261,7 @@ else:
         if advisor:
             # 紧急程度颜色
             urg_colors = {1: "#00c853", 2: "#42a5f5", 3: "#ffab40", 4: "#ff6b35", 5: "#ff4b4b"}
-            urg_color = urg_colors.get(advisor.urgency, "#8892a4")
+            urg_color = urg_colors.get(advisor.urgency, "var(--text-muted)")
 
             # 风险条颜色
             if advisor.risk_score >= 50:

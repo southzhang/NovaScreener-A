@@ -89,6 +89,60 @@ GLOBAL_CSS = """
         box-shadow: 0 0 12px var(--border-glow);
     }
 
+    /* ========== 覆盖 Streamlit 内置主题变量 ========== */
+    :root {
+        --st-text-color: var(--text-primary) !important;
+        --st-text-secondary-color: var(--text-secondary) !important;
+        --st-text-tertiary-color: var(--text-muted) !important;
+        --st-background-color: var(--bg-primary) !important;
+        --st-secondary-background-color: var(--sidebar-bg) !important;
+    }
+    /* Streamlit 1.58 侧边栏导航字体 */
+    [data-testid="stSidebarNav"] {
+        color: var(--text-primary) !important;
+    }
+    [data-testid="stSidebarNav"] * {
+        color: var(--text-primary);
+    }
+
+    /* ========== Streamlit 表单控件文字色 ========== */
+    .stCheckbox label,
+    .stRadio label,
+    .stToggle label,
+    .stCheckbox label p,
+    .stRadio label p,
+    [data-testid="stCheckbox"] label,
+    [data-testid="stCheckbox"] label p,
+    [data-testid="stRadio"] label,
+    [data-testid="stRadio"] label p {
+        color: var(--text-primary) !important;
+    }
+    .stCheckbox label:hover,
+    .stRadio label:hover {
+        color: var(--accent) !important;
+    }
+    /* Expander 标题 */
+    .stExpander summary p,
+    .stExpander summary div,
+    .stExpander summary span,
+    [data-testid="stExpander"] summary p,
+    details[open] summary p {
+        color: var(--text-primary) !important;
+    }
+    /* caption 用 muted 色 */
+    .stCaption,
+    [data-testid="stCaption"],
+    [data-testid="stCaption"] p {
+        color: var(--text-muted) !important;
+    }
+    /* 全局强制文字色跟随主题（覆盖 Streamlit 内置主题） */
+    .stApp, .stApp *:not(svg):not(path):not(strong):not(b) {
+        color: var(--text-primary);
+    }
+    /* 恢复需要特殊颜色的元素 */
+    .stApp a { color: var(--accent); }
+    .stApp code { color: var(--text-secondary); }
+
     /* ========== A股配色 ========== */
     [data-testid="stMetricDelta"] [data-testid="stMetricDeltaIcon-Up"] svg { color: var(--up-color) !important; }
     [data-testid="stMetricDelta"] [data-testid="stMetricDeltaIcon-Down"] svg { color: var(--down-color) !important; }
@@ -203,6 +257,33 @@ GLOBAL_CSS = """
     #MainMenu, header, footer { visibility: hidden; }
     .stDeployButton { display: none; }
     .block-container { padding-top: 1rem; }
+
+    /* ========== 侧边栏导航菜单强制文字色 ========== */
+    [data-testid="stSidebarNav"] a,
+    [data-testid="stSidebarNav"] span,
+    [data-testid="stSidebarNav"] p {
+        color: var(--text-primary) !important;
+    }
+    [data-testid="stSidebarNav"] a:hover,
+    [data-testid="stSidebarNav"] a:focus {
+        color: var(--accent) !important;
+    }
+    /* 侧边栏通用文字 */
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] span:not([role="img"]) {
+        color: var(--text-primary);
+    }
+    /* 侧边栏次级/辅助文字 */
+    [data-testid="stSidebar"] .stCaption,
+    [data-testid="stSidebar"] small,
+    [data-testid="stSidebar"] p[data-testid="stMarkdownCaptionText"] {
+        color: var(--text-muted) !important;
+    }
+    /* 侧边栏粗体 */
+    [data-testid="stSidebar"] strong {
+        color: var(--text-primary);
+    }
 
     /* ========== 滚动条 ========== */
     ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -333,6 +414,61 @@ def inject_global_css():
         border-color: var(--accent);
         box-shadow: 0 0 12px var(--border-glow);
     }}
+
+    /* ========== 覆盖 Streamlit 内置主题变量 ========== */
+    :root {{
+        --st-text-color: var(--text-primary) !important;
+        --st-text-secondary-color: var(--text-secondary) !important;
+        --st-text-tertiary-color: var(--text-muted) !important;
+        --st-background-color: var(--bg-primary) !important;
+        --st-secondary-background-color: var(--sidebar-bg) !important;
+    }}
+    /* Streamlit 1.58 侧边栏导航字体 */
+    [data-testid="stSidebarNav"] {{
+        color: var(--text-primary) !important;
+    }}
+    [data-testid="stSidebarNav"] * {{
+        color: var(--text-primary);
+    }}
+
+    /* ========== Streamlit 表单控件文字色 ========== */
+    .stCheckbox label,
+    .stRadio label,
+    .stToggle label,
+    .stCheckbox label p,
+    .stRadio label p,
+    [data-testid="stCheckbox"] label,
+    [data-testid="stCheckbox"] label p,
+    [data-testid="stRadio"] label,
+    [data-testid="stRadio"] label p {{
+        color: var(--text-primary) !important;
+    }}
+    .stCheckbox label:hover,
+    .stRadio label:hover {{
+        color: var(--accent) !important;
+    }}
+    /* Expander 标题 */
+    .stExpander summary p,
+    .stExpander summary div,
+    .stExpander summary span,
+    [data-testid="stExpander"] summary p,
+    details[open] summary p {{
+        color: var(--text-primary) !important;
+    }}
+    /* caption 用 muted 色 */
+    .stCaption,
+    [data-testid="stCaption"],
+    [data-testid="stCaption"] p {{
+        color: var(--text-muted) !important;
+    }}
+    /* 全局强制文字色跟随主题（覆盖 Streamlit 内置主题） */
+    .stApp, .stApp *:not(svg):not(path):not(strong):not(b) {{
+        color: var(--text-primary);
+    }}
+    /* 恢复需要特殊颜色的元素 */
+    .stApp a {{ color: var(--accent); }}
+    .stApp code {{ color: var(--text-secondary); }}
+
     /* ========== A股配色 ========== */
     [data-testid="stMetricDelta"] [data-testid="stMetricDeltaIcon-Up"] svg {{ color: var(--up-color) !important; }}
     [data-testid="stMetricDelta"] [data-testid="stMetricDeltaIcon-Down"] svg {{ color: var(--down-color) !important; }}
@@ -434,6 +570,33 @@ def inject_global_css():
     #MainMenu, header, footer {{ visibility: hidden; }}
     .stDeployButton {{ display: none; }}
     .block-container {{ padding-top: 1rem; }}
+
+    /* ========== 侧边栏导航菜单强制文字色 ========== */
+    [data-testid="stSidebarNav"] a,
+    [data-testid="stSidebarNav"] span,
+    [data-testid="stSidebarNav"] p {{
+        color: var(--text-primary) !important;
+    }}
+    [data-testid="stSidebarNav"] a:hover,
+    [data-testid="stSidebarNav"] a:focus {{
+        color: var(--accent) !important;
+    }}
+    /* 侧边栏通用文字 */
+    [data-testid="stSidebar"] p,
+    [data-testid="stSidebar"] label,
+    [data-testid="stSidebar"] span:not([role="img"]) {{
+        color: var(--text-primary);
+    }}
+    /* 侧边栏次级/辅助文字 */
+    [data-testid="stSidebar"] .stCaption,
+    [data-testid="stSidebar"] small,
+    [data-testid="stSidebar"] p[data-testid="stMarkdownCaptionText"] {{
+        color: var(--text-muted) !important;
+    }}
+    /* 侧边栏粗体用 secondary 强调 */
+    [data-testid="stSidebar"] strong {{
+        color: var(--text-primary);
+    }}
     /* ========== 滚动条 ========== */
     ::-webkit-scrollbar {{ width: 6px; height: 6px; }}
     ::-webkit-scrollbar-track {{ background: var(--bg-primary); }}

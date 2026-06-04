@@ -23,13 +23,13 @@ with st.expander("📖 V10 策略详解", expanded=False):
     <div style="color:var(--text-secondary); line-height:1.8;">
     <strong style="color:#ff6b35;">V10 全买入公式</strong> — 七条件共振，宁缺毋滥：<br><br>
     <table style="width:100%; border-collapse:collapse;">
-    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">🏔️ 隧道多头</td><td style="color:var(--text-secondary);">收盘价 > EMA(120) > EMA(200)</td></tr>
-    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">📈 双线定式</td><td style="color:var(--text-secondary);">EMA(5) > EMA(20) 且上升</td></tr>
-    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">⚡ QW动能</td><td style="color:var(--text-secondary);">自定义动量指标上升</td></tr>
-    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">📏 通道间距</td><td style="color:var(--text-secondary);">(EMA5-EMA20)/EMA20 > 0.8%</td></tr>
-    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">🔊 放量</td><td style="color:var(--text-secondary);">成交量 > 1.5x 5日均量</td></tr>
-    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">🔴 阳线</td><td style="color:var(--text-secondary);">收盘 > 开盘</td></tr>
-    <tr style="border-bottom:1px solid #2a3a4e;"><td style="padding:6px 0;">💪 强庄控盘</td><td style="color:var(--text-secondary);">加权价格突变检测</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">🏔️ 隧道多头</td><td style="color:var(--text-secondary);">收盘价 > EMA(120) > EMA(200)</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">📈 双线定式</td><td style="color:var(--text-secondary);">EMA(5) > EMA(20) 且上升</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">⚡ QW动能</td><td style="color:var(--text-secondary);">自定义动量指标上升</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">📏 通道间距</td><td style="color:var(--text-secondary);">(EMA5-EMA20)/EMA20 > 0.8%</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">🔊 放量</td><td style="color:var(--text-secondary);">成交量 > 1.5x 5日均量</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">🔴 阳线</td><td style="color:var(--text-secondary);">收盘 > 开盘</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">💪 强庄控盘</td><td style="color:var(--text-secondary);">加权价格突变检测</td></tr>
     <tr><td style="padding:6px 0;">📊 MACD金叉</td><td style="color:var(--text-secondary);">DIF(20,80) 上穿 DEA(9)</td></tr>
     </table>
     <br>

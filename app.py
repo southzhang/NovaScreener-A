@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
 from core.db import init_db, get_signals, get_watchlist, add_watchlist, remove_watchlist, get_positions
-from core.data import get_stock_list, get_top_gainers, get_top_losers, get_realtime_quote, get_stock_history
+from core.data import get_stock_list, get_top_gainers, get_top_losers, get_realtime_quote, get_realtime_quotes_batch, get_stock_history
 from core.strategies import STRATEGY_REGISTRY, get_strategy_names
 from core.scanner import scan_market, scan_watchlist, get_market_overview
 from core.scorer import score_stock, score_batch
@@ -73,21 +73,39 @@ with st.sidebar:
         if _vr["has_update"]:
             if st.button(f"⬆️ 更新至 {_vr['latest']}", type="primary", use_container_width=True):
                 with st.status("更新中...", expanded=True) as status:
-                    st.write("拉取最新代码...")
                     import subprocess, os
+                    _cwd = os.path.dirname(__file__)
+                    
+                    # 1. 暂存本地修改
+                    st.write("暂存本地修改...")
+                    subprocess.run(["git", "stash"], cwd=_cwd, capture_output=True, timeout=10)
+                    
+                    # 2. 拉取最新代码
+                    st.write("拉取最新代码...")
                     r = subprocess.run(
                         ["git", "pull"],
                         capture_output=True, text=True, timeout=30,
-                        cwd=os.path.dirname(__file__),
+                        cwd=_cwd,
                     )
+                    
+                    # 3. 恢复本地修改
+                    st.write("恢复本地修改...")
+                    stash_r = subprocess.run(
+                        ["git", "stash", "pop"],
+                        capture_output=True, text=True, timeout=10,
+                        cwd=_cwd,
+                    )
+                    
                     if r.returncode == 0:
-                        status.update(label=f"✅ 更新成功！重启中...", state="complete")
+                        status.update(label="✅ 更新成功！重启中...", state="complete")
                         st.session_state.pop(_update_key, None)
                         st.cache_data.clear()
                         st.rerun()
                     else:
-                        status.update(label=f"❌ 更新失败", state="error")
+                        status.update(label="❌ 更新失败", state="error")
                         st.error(r.stderr or r.stdout)
+                        if stash_r.returncode != 0:
+                            st.warning("本地修改恢复有冲突，请手动检查 git stash")
         elif _vr["error"]:
             st.caption("⚠️ 无法检查更新")
         else:
@@ -111,25 +129,25 @@ overview = get_market_overview(df=_df_market)
 
 _mkt_html = f"""
 <div style="display:flex; gap:12px; flex-wrap:wrap;">
-  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">总股票数</div>
     <div style="font-size:1.6em; font-weight:700;">{overview.get("total", 0)}</div>
   </div>
-  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">上涨</div>
     <div style="font-size:1.6em; font-weight:700; color:#ef4444;">{overview.get("up", 0)}</div>
     <div style="color:#ef4444; font-size:0.85em;">▲ {overview.get("up_ratio", 0)}%</div>
   </div>
-  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">下跌</div>
     <div style="font-size:1.6em; font-weight:700; color:#22c55e;">{overview.get("down", 0)}</div>
   </div>
-  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">涨停</div>
     <div style="font-size:1.6em; font-weight:700; color:#ef4444;">{overview.get("limit_up", 0)}</div>
     <div style="color:#ef4444; font-size:0.85em;">家</div>
   </div>
-  <div style="flex:1; background:var(--bg-secondary); border:1px solid #1e2d40; border-radius:10px; padding:14px; text-align:center;">
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">跌停</div>
     <div style="font-size:1.6em; font-weight:700; color:#22c55e;">{overview.get("limit_down", 0)}</div>
     <div style="color:#22c55e; font-size:0.85em;">家</div>
@@ -138,34 +156,76 @@ _mkt_html = f"""
 """
 st.html(_mkt_html)
 
-# V10 策略信号
-st.subheader("🏆 V10 策略信号")
-
-# 快速扫描
+# V10 策略信号 — 扫描按钮 + 信号列表合一
+st.subheader("🎯 最近策略信号")
 col1, col2 = st.columns([3, 1])
 with col1:
     st.caption("选择策略 → 扫描市场 → 发现机会")
 with col2:
-    if st.button("🚀 快速扫描", type="primary"):
-        with st.spinner("扫描中..."):
-            results = scan_market(["v10_full"], max_workers=8)
-            if results:
-                st.success(f"找到 {len(results)} 个V10信号！")
-                for r in results[:5]:
-                    with st.container():
-                        cols = st.columns([1, 2, 1, 1, 2])
-                        with cols[0]:
-                            st.markdown(f"**{r['code']}**")
-                        with cols[1]:
-                            st.markdown(f"**{r['name']}**")
-                        with cols[2]:
-                            st.markdown(f"¥{r['price']}")
-                        with cols[3]:
-                            st.markdown(f"**{r['signal_type']}**")
-                        with cols[4]:
-                            st.markdown(" ".join(r['tags'][:3]))
-            else:
-                st.info("未找到V10信号（可能非交易时间或无符合条件）")
+    _scan_clicked = st.button("🚀 快速扫描", type="primary")
+
+if _scan_clicked:
+    with st.spinner("扫描中...（粗筛+精扫）"):
+        _ = scan_market(["v10_full"], max_workers=25)
+    st.success("扫描完成！结果已更新到下方列表")
+
+# 显示今天的信号（扫描结果自动存入数据库，统一从此读取）
+signals = get_signals(limit=50)
+if signals:
+    df_signals = pd.DataFrame(signals)
+    # 只显示今天的信号
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    df_signals = df_signals[df_signals["triggered_at"].str.startswith(today_str, na=False)]
+    df_signals = df_signals.sort_values("triggered_at", ascending=False).drop_duplicates(subset=["code"], keep="first").head(15)
+    cols = ["code", "name", "strategy", "price", "score", "grade", "triggered_at"]
+    for c in cols:
+        if c not in df_signals.columns:
+            df_signals[c] = "" if c in ("grade",) else 0
+    
+    # 获取实时行情（并行加速）
+    signal_codes = df_signals["code"].tolist()
+    realtime_data = {}
+    if signal_codes:
+        signal_quotes = get_realtime_quotes_batch(signal_codes)
+        realtime_data = {q["code"]: q for q in signal_quotes}
+    
+    # 构建显示数据
+    rows = []
+    for _, row in df_signals.iterrows():
+        q = realtime_data.get(row["code"], {})
+        cur_price = q.get("price", 0)
+        pct = q.get("pct_change", 0)
+        rows.append({
+            "代码": row["code"],
+            "名称": row["name"],
+            "策略": row["strategy"],
+            "信号价": row["price"] if row["price"] else 0,
+            "现价": cur_price if cur_price else 0,
+            "涨跌幅": pct,
+            "得分": row["score"],
+            "等级": row["grade"],
+            "触发时间": row["triggered_at"],
+        })
+    
+    df_display = pd.DataFrame(rows)
+    
+    if df_display.empty:
+        st.info("今天暂无信号记录，点击「快速扫描」开始！")
+    else:
+        # 红涨绿跌配色
+        def _color_pct(val):
+            if isinstance(val, (int, float)):
+                if val > 0: return "color: #ef4444; font-weight: 600"
+                elif val < 0: return "color: #22c55e; font-weight: 600"
+            return ""
+        st.dataframe(
+            df_display.style.format({
+                "信号价": "¥{:.2f}", "现价": "¥{:.2f}", "涨跌幅": "{:+.2f}%", "得分": "{:.0f}",
+            }).map(_color_pct, subset=["涨跌幅"]),
+            width='stretch', hide_index=True,
+        )
+else:
+    st.info("暂无信号记录，点击「快速扫描」开始！")
 
 # 涨跌幅排行
 st.subheader("📈 涨跌幅排行")
@@ -217,74 +277,18 @@ with tab2:
     except Exception as e:
         st.error(f"获取跌幅榜失败: {e}")
 
-# 最近信号（含实时涨跌幅）
-st.subheader("🎯 最近策略信号")
-signals = get_signals(limit=50)
-if signals:
-    df_signals = pd.DataFrame(signals)
-    # 只显示今天的信号
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    df_signals = df_signals[df_signals["triggered_at"].str.startswith(today_str, na=False)]
-    df_signals = df_signals.sort_values("triggered_at", ascending=False).drop_duplicates(subset=["code"], keep="first").head(15)
-    cols = ["code", "name", "strategy", "price", "score", "grade", "triggered_at"]
-    for c in cols:
-        if c not in df_signals.columns:
-            df_signals[c] = "" if c in ("grade",) else 0
-    
-    # 获取实时行情
-    realtime_data = {}
-    for _, row in df_signals.iterrows():
-        q = get_realtime_quote(row["code"])
-        if q:
-            realtime_data[row["code"]] = q
-    
-    # 构建显示数据
-    rows = []
-    for _, row in df_signals.iterrows():
-        q = realtime_data.get(row["code"], {})
-        cur_price = q.get("price", 0)
-        pct = q.get("pct_change", 0)
-        rows.append({
-            "代码": row["code"],
-            "名称": row["name"],
-            "策略": row["strategy"],
-            "信号价": f"¥{row['price']:.2f}" if row["price"] else "-",
-            "现价": f"¥{cur_price:.2f}" if cur_price else "-",
-            "涨跌幅": pct,
-            "得分": row["score"],
-            "等级": row["grade"],
-            "触发时间": row["triggered_at"],
-        })
-    
-    df_display = pd.DataFrame(rows)
-    
-    # 红涨绿跌配色
-    def _color_pct(val):
-        if isinstance(val, (int, float)):
-            if val > 0:
-                return "color: #ef4444; font-weight: 600"
-            elif val < 0:
-                return "color: #22c55e; font-weight: 600"
-        return ""
-    
-    df_styled = df_display.style.map(_color_pct, subset=["涨跌幅"])
-    st.dataframe(
-        df_styled,
-        width='stretch', hide_index=True,
-        column_config={
-            "涨跌幅": st.column_config.NumberColumn("涨跌幅", format="%+.2f%%"),
-        }
-    )
-else:
-    st.info("暂无信号记录，点击「快速扫描」开始！")
-
 # 自选股行情
 st.subheader("⭐ 自选股实时行情")
 watchlist = get_watchlist()
 if watchlist:
+    # 并行获取行情
+    wl_codes = [s["code"] for s in watchlist]
+    wl_quotes = get_realtime_quotes_batch(wl_codes)
+    wl_quote_map = {q["code"]: q for q in wl_quotes}
+    
     wl_data = []
     for stock in watchlist:
-        quote = get_realtime_quote(stock["code"])
+        quote = wl_quote_map.get(stock["code"])
         if quote:
             wl_data.append({
                 "代码": stock["code"],
@@ -320,10 +324,15 @@ else:
 st.subheader("💼 持仓概览")
 positions = get_positions()
 if positions:
+    # 并行获取所有持仓的实时行情
+    pos_codes = [p["code"] for p in positions]
+    pos_quotes_list = get_realtime_quotes_batch(pos_codes)
+    pos_quotes = {q["code"]: q for q in pos_quotes_list}
+    
     pos_data = []
     for p in positions:
         # 计算持仓盈亏
-        current_price = get_realtime_quote(p["code"])
+        current_price = pos_quotes.get(p["code"])
         if current_price:
             profit_pct = (current_price["price"] - p["buy_price"]) / p["buy_price"] * 100
             profit_amount = (current_price["price"] - p["buy_price"]) * p["quantity"]

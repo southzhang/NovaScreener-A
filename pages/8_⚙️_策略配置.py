@@ -120,15 +120,17 @@ if st.button("运行回测") and test_code:
                 marker=dict(size=12, color="#ff6b35", symbol="triangle-up"),
             ))
 
+        _is_dark = st.session_state.get("theme", "light") == "dark"
         fig.update_layout(
-            height=500, template="plotly_dark",
+            height=500, template="plotly_dark" if _is_dark else "plotly_white",
             title=f"{test_code} - {strategy_info['name']} 回测",
             xaxis_rangeslider_visible=False,
-            paper_bgcolor="#0a0e17",
-            plot_bgcolor="#0f1520",
-            font=dict(color="#c8cdd8"),
+            paper_bgcolor="#0a0e17" if _is_dark else "#ffffff",
+            plot_bgcolor="#0f1520" if _is_dark else "#f8f9fb",
+            font=dict(color="#c8cdd8" if _is_dark else "#0f1419"),
         )
-        fig.update_xaxes(gridcolor="#1e2d40")
-        fig.update_yaxes(gridcolor="#1e2d40")
+        _grid = "#1e2d40" if _is_dark else "#e2e8f0"
+        fig.update_xaxes(gridcolor=_grid)
+        fig.update_yaxes(gridcolor=_grid)
         st.plotly_chart(fig, width='stretch')
         st.info(f"在过去250个交易日中，共触发 {len(trigger_dates)} 次信号")

@@ -23,10 +23,10 @@ with st.expander("📊 评分维度详解"):
         <th style="padding:8px 0; color:#ff6b35; text-align:left;">权重</th>
         <th style="padding:8px 0; color:#ff6b35; text-align:left;">说明</th>
     </tr>
-    <tr style="border-bottom:1px solid #1e2d40;"><td style="padding:8px 0;">V10技术信号</td><td>40分</td><td style="color:var(--text-secondary);">隧道+通道+QW+强庄+MACD+放量</td></tr>
-    <tr style="border-bottom:1px solid #1e2d40;"><td style="padding:8px 0;">波段回调</td><td>25分</td><td style="color:var(--text-secondary);">EMA20/50/120 + RSI + MACD</td></tr>
-    <tr style="border-bottom:1px solid #1e2d40;"><td style="padding:8px 0;">资金面</td><td>20分</td><td style="color:var(--text-secondary);">主力净流入 > 0</td></tr>
-    <tr style="border-bottom:1px solid #1e2d40;"><td style="padding:8px 0;">基本面</td><td>15分</td><td style="color:var(--text-secondary);">ROE>5%, 净利润增速>0%</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:8px 0;">V10技术信号</td><td>40分</td><td style="color:var(--text-secondary);">隧道+通道+QW+强庄+MACD+放量</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:8px 0;">波段回调</td><td>25分</td><td style="color:var(--text-secondary);">EMA20/50/120 + RSI + MACD</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:8px 0;">资金面</td><td>20分</td><td style="color:var(--text-secondary);">主力净流入 > 0</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:8px 0;">基本面</td><td>15分</td><td style="color:var(--text-secondary);">ROE>5%, 净利润增速>0%</td></tr>
     <tr><td style="padding:8px 0;">趋势强度</td><td>10分</td><td style="color:var(--text-secondary);">EMA多头排列 + 通道间距</td></tr>
     </table>
     <br>

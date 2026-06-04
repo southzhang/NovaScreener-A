@@ -21,12 +21,12 @@ with st.expander("📖 策略说明"):
         <th style="padding:8px 0; color:#ff6b35; text-align:left;">条件</th>
         <th style="padding:8px 0; color:#ff6b35; text-align:left;">适合</th>
     </tr>
-    <tr style="border-bottom:1px solid #1e2d40;">
+    <tr style="border-bottom:1px solid var(--border-color);">
         <td style="padding:8px 0;">🔥 趋势共振</td>
         <td style="color:var(--text-secondary);">量比>3 + 涨幅3-6% + 成交额>2000万 + 流通<200亿</td>
         <td style="color:var(--text-secondary);">趋势确认型</td>
     </tr>
-    <tr style="border-bottom:1px solid #1e2d40;">
+    <tr style="border-bottom:1px solid var(--border-color);">
         <td style="padding:8px 0;">🎯 游资爆量V1</td>
         <td style="color:var(--text-secondary);">量比>4 + 涨幅3-7% + 成交额>5000万 + 流通<100亿</td>
         <td style="color:var(--text-secondary);">爆量追涨型</td>
@@ -210,7 +210,7 @@ if st.session_state.get("auction_scanned"):
         # 汇总卡片
         sum_cols = st.columns(5)
         sum_items = [
-            ("📊 扫描", f"{stats['total_scanned']}只", "#e8eaf0"),
+            ("📊 扫描", f"{stats['total_scanned']}只", "var(--text-primary)"),
             ("🎯 选出", f"{stats['total_selected']}只", "#ff6b35"),
             ("🔥 趋势", f"{stats['trend_count']}", "#ff4b4b"),
             ("🎯 游V1+V2", f"{stats['youzi_v1_count'] + stats['youzi_v2_count']}", "#ffab40"),
