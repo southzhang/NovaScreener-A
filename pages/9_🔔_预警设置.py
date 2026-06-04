@@ -104,6 +104,17 @@ with col2:
     watchlist_alert = st.checkbox("启用自选股异动推送", value=True)
     pct_threshold = st.slider("涨跌幅阈值 (%)", 3, 10, 5)
 
+# 持仓预警
+st.divider()
+st.html("""
+<div style="background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:16px; margin-bottom:12px;">
+    <div style="color:#ff6b35; font-weight:600; margin-bottom:4px;">💼 持仓预警</div>
+    <div style="color:var(--text-muted); font-size:0.85em;">基于V10策略+趋势波段分析，当持仓股出现减仓/清仓/止盈/加仓信号时自动推送飞书通知</div>
+</div>
+""")
+position_alert = st.checkbox("启用持仓预警推送", value=True)
+st.caption("⚠️ 需同时开启盯盘监控（盯盘监控页面）才会生效，监控器每轮检查持仓并推送紧急程度≥3的操作建议")
+
 # 历史预警记录
 st.divider()
 st.html('<h2>📜 预警历史</h2>')

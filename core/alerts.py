@@ -129,6 +129,63 @@ def send_watchlist_alert(code: str, name: str, alert_type: str, price: float, pc
     return success
 
 
+def send_position_alert(
+    code: str, name: str, action: str, reason: str,
+    price: float, buy_price: float, pnl_pct: float,
+    risk_score: int, dynamic_stop: float, dynamic_target: float,
+) -> bool:
+    """发送持仓操作建议预警"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 根据操作类型选颜色和emoji
+    if "清仓" in action:
+        header_color = "red"
+        emoji = "🔴"
+    elif "减仓" in action:
+        header_color = "orange"
+        emoji = "🟡"
+    elif "加仓" in action:
+        header_color = "blue"
+        emoji = "🔵"
+    elif "离场" in action or "止盈" in action:
+        header_color = "green"
+        emoji = "💰"
+    else:
+        header_color = "blue"
+        emoji = "🟢"
+
+    pnl_color = "#ef4444" if pnl_pct >= 0 else "#22c55e"
+    pnl_str = f"+{pnl_pct:.1f}%" if pnl_pct >= 0 else f"{pnl_pct:.1f}%"
+
+    elements = [
+        {
+            "tag": "div",
+            "text": {
+                "tag": "lark_md",
+                "content": (
+                    f"**股票**: {name}（{code}）\n"
+                    f"**现价**: ¥{price:.2f}（成本 ¥{buy_price:.2f}）\n"
+                    f"**盈亏**: <font color='{pnl_color}'>{pnl_str}</font>\n"
+                    f"**建议**: {emoji} {action}\n"
+                    f"**理由**: {reason}\n"
+                    f"**风险评分**: {risk_score}/100\n"
+                    f"**止损**: ¥{dynamic_stop:.2f} | **目标**: ¥{dynamic_target:.2f}\n"
+                    f"**时间**: {now}"
+                ),
+            },
+        },
+        {"tag": "hr"},
+        {
+            "tag": "note",
+            "elements": [{"tag": "plain_text", "content": f"{emoji} 量化盯盘 - 持仓预警"}],
+        },
+    ]
+    success = send_feishu_card(f"{emoji} 持仓预警: {name} {action}", elements)
+    if success:
+        save_alert(code, "position", f"{action}: {reason}")
+    return success
+
+
 def send_batch_signals(signals: list[dict]) -> bool:
     """批量发送信号汇总"""
     if not signals:
