@@ -73,39 +73,43 @@ with st.sidebar:
         if _vr["has_update"]:
             if st.button(f"⬆️ 更新至 {_vr['latest']}", type="primary", use_container_width=True):
                 with st.status("更新中...", expanded=True) as status:
-                    import subprocess, os
-                    _cwd = os.path.dirname(__file__)
+                    import subprocess, os, sys
+                    _cwd = os.path.dirname(os.path.abspath(__file__))
                     
                     # 1. 暂存本地修改
-                    st.write("暂存本地修改...")
-                    subprocess.run(["git", "stash"], cwd=_cwd, capture_output=True, timeout=10)
+                    st.write("📦 暂存本地修改...")
+                    stash_r = subprocess.run(["git", "stash"], cwd=_cwd, capture_output=True, text=True, timeout=10)
+                    had_stash = stash_r.returncode == 0 and "Saved" in (stash_r.stdout or "")
                     
                     # 2. 拉取最新代码
-                    st.write("拉取最新代码...")
+                    st.write("⬇️ 拉取最新代码...")
                     r = subprocess.run(
                         ["git", "pull"],
-                        capture_output=True, text=True, timeout=30,
+                        capture_output=True, text=True, timeout=60,
                         cwd=_cwd,
                     )
+                    st.code(r.stdout or r.stderr or "无输出")
                     
                     # 3. 恢复本地修改
-                    st.write("恢复本地修改...")
-                    stash_r = subprocess.run(
-                        ["git", "stash", "pop"],
-                        capture_output=True, text=True, timeout=10,
-                        cwd=_cwd,
-                    )
+                    if had_stash:
+                        st.write("📂 恢复本地修改...")
+                        stash_pop_r = subprocess.run(
+                            ["git", "stash", "pop"],
+                            capture_output=True, text=True, timeout=10,
+                            cwd=_cwd,
+                        )
+                        if stash_pop_r.returncode != 0:
+                            st.warning("本地修改恢复有冲突，已保留在 git stash 中")
                     
                     if r.returncode == 0:
-                        status.update(label="✅ 更新成功！重启中...", state="complete")
+                        status.update(label="✅ 更新成功！正在重启...", state="complete")
                         st.session_state.pop(_update_key, None)
                         st.cache_data.clear()
-                        st.rerun()
+                        # 真正重启 Streamlit 进程
+                        os.execv(sys.executable, [sys.executable] + sys.argv)
                     else:
                         status.update(label="❌ 更新失败", state="error")
-                        st.error(r.stderr or r.stdout)
-                        if stash_r.returncode != 0:
-                            st.warning("本地修改恢复有冲突，请手动检查 git stash")
+                        st.error(r.stderr or r.stdout or "未知错误")
         elif _vr["error"]:
             st.caption("⚠️ 无法检查更新")
         else:
