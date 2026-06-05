@@ -174,14 +174,19 @@ def scan_market(
         pre = pre[pre["amount"] > 0]
         # 过滤低价股
         pre = pre[pre["price"] >= 5]
-        # 过滤低成交额（< 3000万）— V10需要活跃股
+        # 过滤低成交额（< 2000万）— V10需要一定活跃度
         if "amount" in pre.columns:
-            pre = pre[pre["amount"] >= 3000]
-        # 按成交额排序取Top 600（足够覆盖V10候选，大幅减少K线请求）
-        pre = pre.nlargest(600, "amount")
+            pre = pre[pre["amount"] >= 2000]
+        
+        total_after_filter = len(pre)
+        # 成交额Top 1500进入精扫（覆盖绝大多数V10候选）
+        # 超过1500只时按成交额截断，避免K线请求过多
+        SCAN_TOP_N = 1500
+        if total_after_filter > SCAN_TOP_N:
+            pre = pre.nlargest(SCAN_TOP_N, "amount")
         codes = pre["code"].tolist()
         names = dict(zip(pre["code"], pre["name"]))
-        print(f"[扫描] 粗筛: {len(all_stocks)} → {len(codes)} 只")
+        print(f"[扫描] 粗筛: {len(all_stocks)} → {total_after_filter}（过滤后）→ {len(codes)} 只（Top {SCAN_TOP_N}）")
 
     # 过滤ST和退市股
     codes = [c for c in codes if "ST" not in names.get(c, "") and "退市" not in names.get(c, "")]

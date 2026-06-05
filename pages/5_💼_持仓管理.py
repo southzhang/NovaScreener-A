@@ -2,8 +2,8 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime
-from core.db import add_position, get_positions, sell_position, delete_position, update_position
-from core.data import get_realtime_quote, get_stock_history
+from core.db import add_position, get_positions, sell_position, delete_position, update_position, add_to_position, get_position_by_code
+from core.data import get_realtime_quote, get_stock_history, get_realtime_quotes_batch
 from core.recommend import calc_trailing_stop
 from core.alerts import send_feishu_card
 from core.ui import inject_global_css, render_theme_toggle, render_page_header
@@ -58,14 +58,30 @@ with st.form("add_position", clear_on_submit=True):
                             ts = calc_trailing_stop(close, high, low, buy_price)
                             stop_loss = ts.final_stop
                     except Exception:
-                        stop_loss = round(buy_price * 0.86, 2)
+                        stop_loss = round(buy_price * 0.92, 2)
 
-        position_id = add_position(
-            code=code, name=name, buy_price=buy_price, quantity=quantity,
-            stop_loss=round(stop_loss, 2), target_price=round(target_price, 2),
-            notes=notes
-        )
-        st.success(f"✅ 已添加 {name}({code}) {quantity}股 @ ¥{buy_price}")
+        # 检查是否已有持仓 → 自动合并加仓
+        existing_id = add_to_position(code, buy_price, quantity)
+        if existing_id:
+            # 已有持仓，走加仓合并逻辑
+            merged = get_position_by_code(code)
+            if merged:
+                new_avg = merged["buy_price"]
+                new_qty = merged["quantity"]
+                st.success(f"📈 已加仓合并 {name}({code}) +{quantity}股 @ ¥{buy_price:.2f}，新均价 ¥{new_avg:.3f}，总持仓 {new_qty}股")
+                # 如果新输入了止损/目标价且原值为0，更新
+                if stop_loss > 0 and merged.get("stop_loss", 0) == 0:
+                    update_position(existing_id, stop_loss=round(stop_loss, 2))
+                if target_price > 0 and merged.get("target_price", 0) == 0:
+                    update_position(existing_id, target_price=round(target_price, 2))
+        else:
+            # 全新持仓
+            position_id = add_position(
+                code=code, name=name, buy_price=buy_price, quantity=quantity,
+                stop_loss=round(stop_loss, 2), target_price=round(target_price, 2),
+                notes=notes
+            )
+            st.success(f"✅ 已添加 {name}({code}) {quantity}股 @ ¥{buy_price}")
         st.rerun()
 
 
@@ -78,12 +94,10 @@ positions = get_positions(status="holding")
 if not positions:
     st.info("📭 暂无持仓，请在上方添加")
 else:
+    # 批量获取行情（比逐个快很多）
     codes = [p["code"] for p in positions]
-    quotes = {}
-    for code in codes:
-        q = get_realtime_quote(code)
-        if q:
-            quotes[code] = q
+    quotes_list = get_realtime_quotes_batch(codes)
+    quotes = {q["code"]: q for q in quotes_list}
 
     total_cost = 0
     total_value = 0
@@ -309,18 +323,21 @@ else:
             st.warning(f"🔴 **{p['name']}** {trailing_info.action} | 距止损还有{(current_price - trailing_info.final_stop) / current_price * 100:.1f}%")
 
         # 操作按钮
-        btn_cols = st.columns([1, 1, 1, 3])
+        btn_cols = st.columns([1, 1, 1, 1, 2])
         with btn_cols[0]:
-            if st.button(f"📤 卖出", key=f"sell_{p['id']}"):
+            if st.button("📤 卖出", key=f"sell_{p['id']}"):
                 sell_position(p["id"], current_price)
                 st.success(f"已卖出 {p['name']} @ ¥{current_price}")
                 st.rerun()
         with btn_cols[1]:
-            if st.button(f"🗑️ 删除", key=f"del_{p['id']}"):
+            if st.button("📈 加仓", key=f"add_{p['id']}"):
+                st.session_state[f"show_add_form_{p['id']}"] = True
+        with btn_cols[2]:
+            if st.button("🗑️ 删除", key=f"del_{p['id']}"):
                 delete_position(p["id"])
                 st.rerun()
-        with btn_cols[2]:
-            if st.button(f"🔔 止损提醒", key=f"alert_{p['id']}"):
+        with btn_cols[3]:
+            if st.button("🔔 提醒", key=f"alert_{p['id']}"):
                 if stop_loss > 0:
                     msg = f"⚠️ {p['name']}({code}) 现价¥{current_price} | 止损价¥{stop_loss} | 距止损{(current_price - stop_loss) / current_price * 100:.1f}%"
                     elements = [{"tag": "div", "text": {"tag": "lark_md", "content": msg}}]
@@ -328,6 +345,39 @@ else:
                         st.success("已发送飞书提醒！")
                     else:
                         st.warning("发送失败，请检查Webhook配置")
+                else:
+                    st.warning("请先设置止损价")
+
+        # 加仓表单（点击加仓按钮后展开）
+        if st.session_state.get(f"show_add_form_{p['id']}", False):
+            with st.form(f"add_more_{p['id']}"):
+                ac1, ac2, ac3 = st.columns([2, 2, 1])
+                with ac1:
+                    add_qty = st.number_input("加仓数量（股）", min_value=100, step=100, value=100, key=f"aq_{p['id']}")
+                with ac2:
+                    add_price_input = st.number_input("加仓价格", min_value=0.01, step=0.01, format="%.2f", value=round(current_price, 2), key=f"ap_{p['id']}")
+                with ac3:
+                    st.write("")
+                    st.write("")
+                    confirm_add = st.form_submit_button("✅ 确认加仓", type="primary")
+                    cancel_add = st.form_submit_button("❌ 取消")
+
+                if confirm_add:
+                    result_id = add_to_position(code, add_price_input, add_qty)
+                    if result_id:
+                        # 计算新均价
+                        new_total = (p["buy_price"] * p["quantity"] + add_price_input * add_qty)
+                        new_qty = p["quantity"] + add_qty
+                        new_avg = new_total / new_qty
+                        st.success(f"✅ 加仓成功！{p['name']} +{add_qty}股 @ ¥{add_price_input:.2f}，新均价 ¥{new_avg:.3f}，总持仓 {new_qty}股")
+                        st.session_state[f"show_add_form_{p['id']}"] = False
+                        st.rerun()
+                    else:
+                        st.error("加仓失败，未找到持仓记录")
+
+                if cancel_add:
+                    st.session_state[f"show_add_form_{p['id']}"] = False
+                    st.rerun()
 
         st.html("<hr style='margin:8px 0;'>")
 

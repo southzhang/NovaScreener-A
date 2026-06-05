@@ -133,39 +133,51 @@ def calc_trailing_stop(
 
     # ---- 第一层: ATR追踪止盈 ----
     if atr_pct >= 4.0:
-        # 高波动票：固定止盈
-        atr_mode = "高波动固定止盈"
+        # 高波动票：给足空间
+        atr_mode = "高波动ATR追踪"
         if profit_pct >= 5:
-            atr_stop = cost_price * 1.02
-            atr_stage = "锁定利润期"
-        else:
-            atr_stop = cost_price * 0.97
-            atr_stage = "建仓期"
-    elif atr_pct >= 3.0:
-        # 中波动：ATR收紧
-        atr_mode = "中波动收紧ATR"
-        if profit_pct < 5:
-            n_atr = 2.0
-            atr_stage = "建仓期(收紧)"
-        elif profit_pct < 15:
             n_atr = 1.5
-            atr_stage = "盈利期"
+            atr_stage = "锁定利润期"
+            atr_stop = highest - n_atr * atr
+        elif profit_pct >= 0:
+            n_atr = 2.5
+            atr_stage = "微盈期"
+            atr_stop = highest - n_atr * atr
         else:
-            n_atr = 1.2
-            atr_stage = "丰厚利润期"
-        atr_stop = highest - n_atr * atr
-    else:
-        # 低波动：经典三层ATR
-        atr_mode = "低波动ATR追踪"
-        if profit_pct < 5:
             n_atr = 3.0
             atr_stage = "建仓期"
-        elif profit_pct < 15:
-            n_atr = 2.5
+            atr_stop = highest - n_atr * atr
+    elif atr_pct >= 2.5:
+        # 中波动：ATR递进收紧
+        atr_mode = "中波动ATR追踪"
+        if profit_pct >= 15:
+            n_atr = 1.2
+            atr_stage = "丰厚利润期"
+        elif profit_pct >= 5:
+            n_atr = 1.8
             atr_stage = "盈利期"
+        elif profit_pct >= 0:
+            n_atr = 2.5
+            atr_stage = "微盈期"
         else:
+            n_atr = 3.5
+            atr_stage = "建仓期"
+        atr_stop = highest - n_atr * atr
+    else:
+        # 低波动：给更多空间
+        atr_mode = "低波动ATR追踪"
+        if profit_pct >= 15:
             n_atr = 2.0
             atr_stage = "丰厚利润期"
+        elif profit_pct >= 5:
+            n_atr = 2.5
+            atr_stage = "盈利期"
+        elif profit_pct >= 0:
+            n_atr = 3.0
+            atr_stage = "微盈期"
+        else:
+            n_atr = 4.0
+            atr_stage = "建仓期"
         atr_stop = highest - n_atr * atr
 
     atr_stop = round(atr_stop, 2)
@@ -203,8 +215,19 @@ def calc_trailing_stop(
         structure_status = "无有效前低"
 
     # ---- 综合止盈价 ----
-    stops = [s for s in [atr_stop, structure_support] if s > 0]
-    final_stop = round(min(stops), 2) if stops else atr_stop
+    # 结构支撑是更硬的技术位，权重更高；ATR是动态追踪，作为辅助
+    # 建仓期：以结构支撑为主（避免被正常波动洗出）
+    # 盈利期：收紧到两者中较低的（保护利润）
+    if profit_pct >= 10:
+        # 盈利丰厚：两取低值，优先保利润
+        stops = [s for s in [atr_stop, structure_support] if s > 0]
+        final_stop = round(min(stops), 2) if stops else atr_stop
+    else:
+        # 建仓/微盈期：以结构支撑为锚，ATR只作参考下限
+        if structure_support > 0 and atr_stop > 0:
+            final_stop = round(max(atr_stop, structure_support), 2)
+        else:
+            final_stop = round(max(atr_stop, structure_support, price * 0.92), 2)
 
     # ---- 风险等级 ----
     triggers = 0

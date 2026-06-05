@@ -231,6 +231,53 @@ def delete_position(position_id: int):
         conn.execute("DELETE FROM portfolio WHERE id = ?", (position_id,))
 
 
+def add_to_position(code: str, add_price: float, add_quantity: int) -> int | None:
+    """加仓：合并同一股票的持仓（加权平均买入价 + 累加数量）
+    
+    只合并 status='holding' 的记录。如果有多条 holding 记录，
+    合并到最早的那条，删除其余条目。
+    返回合并后的 position_id，无持仓返回 None。
+    """
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT id, buy_price, quantity, stop_loss, target_price, notes "
+            "FROM portfolio WHERE code = ? AND status = 'holding' ORDER BY created_at ASC",
+            (code,)
+        ).fetchall()
+        
+        if not rows:
+            return None
+        
+        # 计算合并后的加权平均价和总数量
+        total_cost = sum(r["buy_price"] * r["quantity"] for r in rows)
+        total_quantity = sum(r["quantity"] for r in rows) + add_quantity
+        total_cost += add_price * add_quantity
+        avg_price = round(total_cost / total_quantity, 3)
+        
+        # 保留最早那条，更新价格和数量
+        primary_id = rows[0]["id"]
+        conn.execute(
+            "UPDATE portfolio SET buy_price = ?, quantity = ? WHERE id = ?",
+            (avg_price, total_quantity, primary_id)
+        )
+        
+        # 删除其余重复记录
+        for r in rows[1:]:
+            conn.execute("DELETE FROM portfolio WHERE id = ?", (r["id"],))
+        
+        return primary_id
+
+
+def get_position_by_code(code: str, status: str = "holding") -> dict | None:
+    """按股票代码获取持仓（holding 状态取第一条）"""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM portfolio WHERE code = ? AND status = ? ORDER BY created_at ASC LIMIT 1",
+            (code, status)
+        ).fetchone()
+        return dict(row) if row else None
+
+
 def get_positions(status: str = "holding") -> list[dict]:
     """获取持仓列表"""
     with get_db() as conn:
