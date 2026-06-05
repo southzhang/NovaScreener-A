@@ -5,7 +5,7 @@ import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
 from core.db import init_db, get_signals, get_watchlist, add_watchlist, remove_watchlist, get_positions
-from core.data import get_stock_list, get_top_gainers, get_top_losers, get_realtime_quote, get_realtime_quotes_batch, get_stock_history
+from core.data import get_stock_list, get_top_gainers, get_top_losers, get_realtime_quote, get_realtime_quotes_batch, get_stock_history, get_market_indices
 from core.strategies import STRATEGY_REGISTRY, get_strategy_names
 from core.scanner import scan_market, scan_watchlist, get_market_overview
 from core.scorer import score_stock, score_batch
@@ -129,6 +129,24 @@ st.html("""
 # 市场概览（红涨绿跌）— 只拉一次全市场数据，三个模块共享
 st.subheader("🏛️ 市场概览")
 _df_market = get_stock_list()  # 只拉一次！
+
+# 四大指数实时行情
+_indices = get_market_indices()
+if _indices:
+    _idx_cards = ""
+    for _idx in _indices:
+        _pct = _idx["pct_change"]
+        _color = "#ef4444" if _pct >= 0 else "#22c55e"
+        _arrow = "▲" if _pct >= 0 else "▼"
+        _price_str = f"{_idx['price']:.2f}" if _idx['price'] > 100 else f"{_idx['price']:.3f}"
+        _idx_cards += f"""
+        <div style="flex:1; min-width:120px; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:10px 14px; text-align:center;">
+            <div style="color:var(--text-muted); font-size:0.82em; margin-bottom:2px;">{_idx['name']}</div>
+            <div style="font-size:1.3em; font-weight:700; color:{_color};">{_price_str}</div>
+            <div style="color:{_color}; font-size:0.85em; font-weight:600;">{_arrow} {_idx['change']:+.2f} ({_pct:+.2f}%)</div>
+        </div>"""
+    st.html(f"""<div style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px;">{_idx_cards}</div>""")
+
 overview = get_market_overview(df=_df_market)
 
 _mkt_html = f"""

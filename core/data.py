@@ -325,6 +325,67 @@ def get_stock_list() -> pd.DataFrame:
     return pd.DataFrame()
 
 
+# ===== 大盘指数 =====
+
+# 主要指数代码（腾讯行情格式）
+_INDEX_CODES = {
+    "sh000001": "上证指数",
+    "sz399001": "深证成指",
+    "sz399006": "创业板指",
+    "sh000688": "科创综指",
+}
+
+
+def get_market_indices() -> list[dict]:
+    """获取四大指数实时行情（腾讯API，单次请求）"""
+    cache_key = "market_indices"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    secids = ",".join(_INDEX_CODES.keys())
+    url = f"https://qt.gtimg.cn/q={secids}"
+    try:
+        resp = requests.get(url, timeout=5, headers=HEADERS)
+        text = resp.text
+        results = []
+        for line in text.strip().split(";"):
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            try:
+                parts = line.split("=")[1].strip('"').split("~")
+                if len(parts) < 40:
+                    continue
+                secid = line.split("=")[0].split("_")[-1].split(".")[-1] if "_" in line.split("=")[0] else ""
+                # 从腾讯返回的v_字段中提取secid
+                var_part = line.split("=")[0]
+                # var_part 如: v_sh000001
+                raw_code = var_part.replace("v_", "").strip()
+                name = _INDEX_CODES.get(raw_code, parts[1] if len(parts) > 1 else "")
+                price = float(parts[3]) if parts[3] else 0
+                pct_change = float(parts[32]) if parts[32] else 0
+                pre_close = float(parts[4]) if parts[4] else 0
+                change = round(price - pre_close, 2) if pre_close > 0 else 0
+                results.append({
+                    "code": raw_code,
+                    "name": name,
+                    "price": price,
+                    "change": change,
+                    "pct_change": pct_change,
+                    "high": float(parts[33]) if parts[33] else 0,
+                    "low": float(parts[34]) if parts[34] else 0,
+                    "amount": float(parts[37]) if parts[37] else 0,
+                })
+            except (ValueError, IndexError):
+                continue
+        _set_cache(cache_key, results)
+        return results
+    except Exception as e:
+        print(f"[数据] 获取指数行情失败: {e}")
+        return []
+
+
 # ===== 板块数据 =====
 
 # 缓存板块排名
