@@ -308,10 +308,79 @@ GLOBAL_CSS = """
 """
 
 
+def _detect_system_theme() -> str:
+    """检测系统明暗模式偏好
+    
+    优先级：
+    1. session_state 中的手动选择（theme_pref != auto）
+    2. URL query param system_theme（JS 回传）
+    3. macOS 系统设置（subprocess 检测）
+    4. 默认 light
+    """
+    pref = st.session_state.get("theme_pref", "auto")
+    
+    # 手动选择的优先
+    if pref in ("light", "dark"):
+        return pref
+    
+    # auto 模式：依次尝试检测
+    # 1. JS 通过 query params 回传的值（最准确，反映浏览器端系统偏好）
+    params = st.query_params
+    sys_theme = params.get("system_theme")
+    if sys_theme in ("light", "dark"):
+        return sys_theme
+    
+    # 2. macOS 系统检测（后端检测）
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["defaults", "read", "-g", "AppleInterfaceStyle"],
+            capture_output=True, text=True, timeout=2
+        )
+        if result.returncode == 0 and "Dark" in result.stdout:
+            return "dark"
+    except Exception:
+        pass
+    
+    return "light"
+
+
+def _inject_system_theme_detector():
+    """注入 JS 检测系统主题偏好，通过 query params 回传给 Python
+    
+    只在 auto 模式下且 query params 中没有 system_theme 时执行。
+    JS 检测到系统主题变化时自动刷新页面。
+    """
+    params = st.query_params
+    if params.get("system_theme") in ("light", "dark"):
+        return  # 已经有值了，不需要再检测
+    
+    st.html("""
+    <script>
+    (function() {
+        const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = dark ? 'dark' : 'light';
+        const url = new URL(window.location);
+        url.searchParams.set('system_theme', theme);
+        // 用 replace 避免产生历史记录
+        window.location.replace(url.toString());
+    })();
+    </script>
+    """)
+
+
 def inject_global_css():
-    """注入全局 CSS 样式（根据 session_state 选择主题变量）"""
-    # 根据 session_state 选择主题变量
-    theme = st.session_state.get("theme", "light")
+    """注入全局 CSS 样式（根据 session_state 选择主题变量，支持跟随系统）"""
+    # 主题优先级：手动选择 > 跟随系统
+    theme_pref = st.session_state.get("theme_pref", "auto")  # auto / light / dark
+    if theme_pref == "auto":
+        # 跟随系统：检测系统主题偏好
+        _inject_system_theme_detector()
+        theme = _detect_system_theme()
+        st.session_state["theme"] = theme
+    else:
+        theme = theme_pref
+        st.session_state["theme"] = theme
     if theme == "dark":
         css_vars = """
         --bg-primary: #0a0e17;
@@ -611,25 +680,37 @@ def inject_global_css():
 
 
 def render_theme_toggle():
-    """在右上角渲染主题切换按钮（用 JavaScript 精确定位，不影响其他按钮）"""
-    current = st.session_state.get("theme", "light")
-    is_dark = current == "dark"
-    icon = "☀️" if is_dark else "🌙"
-    tooltip = "切换到浅色模式" if is_dark else "切换到深色模式"
+    """在右上角渲染主题切换按钮（三态：跟随系统 / 浅色 / 深色）"""
+    pref = st.session_state.get("theme_pref", "auto")
+    
+    # 三态循环：auto → light → dark → auto
+    icon_map = {"auto": "🔄", "light": "☀️", "dark": "🌙"}
+    label_map = {"auto": "跟随系统", "light": "浅色模式", "dark": "深色模式"}
+    next_map = {"auto": "light", "light": "dark", "dark": "auto"}
+    
+    icon = icon_map.get(pref, "🔄")
+    tooltip = f"{label_map.get(pref, '跟随系统')}（点击切换）"
     
     if st.button(icon, key="theme_toggle_btn", help=tooltip, type="secondary"):
-        st.session_state["theme"] = "light" if is_dark else "dark"
+        new_pref = next_map[pref]
+        st.session_state["theme_pref"] = new_pref
+        if new_pref == "auto":
+            # auto 模式下清掉手动 theme，让 _sync_system_theme 决定
+            st.session_state.pop("theme", None)
+        else:
+            st.session_state["theme"] = new_pref
+        # 清掉 query param 避免残留
+        st.query_params.pop("system_theme", None)
         st.rerun()
     
-    # 用 JavaScript 精确定位按钮（找到包含主题图标的按钮）
+    # 用 JavaScript 精确定位按钮（找到包含主题图标的那个）
     st.html("""
     <script>
     function positionThemeBtn() {
-        // 找到所有按钮，找到包含主题图标的那个
         const buttons = document.querySelectorAll('[data-testid="stButton"] button');
         for (const btn of buttons) {
             const text = btn.textContent.trim();
-            if (text === '☀️' || text === '🌙') {
+            if (text === '☀️' || text === '🌙' || text === '🔄') {
                 btn.style.position = 'fixed';
                 btn.style.top = '12px';
                 btn.style.right = '24px';
@@ -655,7 +736,6 @@ def render_theme_toggle():
             }
         }
     }
-    // 延迟执行，确保按钮已渲染
     setTimeout(positionThemeBtn, 100);
     </script>
     """)
