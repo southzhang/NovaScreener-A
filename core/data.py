@@ -24,6 +24,16 @@ os.environ.setdefault("NO_PROXY", "*")
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
+# 全局Session：TCP连接复用，减少TLS握手开销
+_session = requests.Session()
+_session.headers.update(HEADERS)
+_session.mount("https://", requests.adapters.HTTPAdapter(
+    pool_connections=25, pool_maxsize=25, max_retries=0
+))
+_session.mount("http://", requests.adapters.HTTPAdapter(
+    pool_connections=25, pool_maxsize=25, max_retries=0
+))
+
 # 内存缓存
 _cache: dict[str, tuple[float, object]] = {}
 CACHE_TTL = 300  # 5分钟
@@ -43,28 +53,26 @@ def _set_cache(key: str, data):
 
 # ===== 腾讯K线（首选）=====
 
-def tencent_klines(code: str, days: int = 250) -> pd.DataFrame:
-    """腾讯前复权日K线"""
-    cache_key = f"tencent_kline_{code}_{days}"
-    cached = _get_cached(cache_key)
-    if cached is not None and isinstance(cached, pd.DataFrame):
-        return cached
-
-    prefix = "sh" if code.startswith("6") else "sz"
-    symbol = f"{prefix}{code}"
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{days},qfq"
-
+def _parse_tencent_kline_resp(text: str, symbol: str) -> pd.DataFrame | None:
+    """解析腾讯K线API响应，返回DataFrame或None（含防御性类型检查）"""
     try:
-        resp = requests.get(url, timeout=5, headers=HEADERS)
-        data = json.loads(resp.text)
-        sec_data = data.get("data", {}).get(symbol, {})
-        bars = sec_data.get("qfqday", []) or sec_data.get("day", [])
-
-        if not bars:
-            return pd.DataFrame()
-
-        records = []
-        for b in bars:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    sec_data = data.get("data", {})
+    if not isinstance(sec_data, dict):
+        return None
+    stock_data = sec_data.get(symbol, {})
+    if not isinstance(stock_data, dict):
+        return None
+    bars = stock_data.get("qfqday", []) or stock_data.get("day", [])
+    if not bars:
+        return None
+    records = []
+    for b in bars:
+        try:
             records.append({
                 "date": b[0],
                 "open": float(b[1]),
@@ -73,18 +81,62 @@ def tencent_klines(code: str, days: int = 250) -> pd.DataFrame:
                 "low": float(b[4]),
                 "volume": float(b[5]) if len(b) > 5 and b[5] else 0,
             })
+        except (IndexError, ValueError):
+            continue
+    if not records:
+        return None
+    df = pd.DataFrame(records)
+    df["date"] = pd.to_datetime(df["date"])
+    return df
 
-        df = pd.DataFrame(records)
-        df["date"] = pd.to_datetime(df["date"])
-        _set_cache(cache_key, df)
-        return df.copy()
-    except Exception as e:
-        print(f"[数据] 腾讯K线 {code} 失败: {e}")
-        return pd.DataFrame()
+
+def tencent_klines(code: str, days: int = 250) -> pd.DataFrame:
+    """腾讯前复权日K线（超时自动重试1次）"""
+    cache_key = f"tencent_kline_{code}_{days}"
+    cached = _get_cached(cache_key)
+    if cached is not None and isinstance(cached, pd.DataFrame):
+        return cached
+
+    # 前缀映射：6/68x=sh, 0/3=sz, 83/87/43=bj(北交所)
+    if code.startswith("6"):
+        prefix = "sh"
+    elif code.startswith(("0", "3")):
+        prefix = "sz"
+    else:
+        prefix = "bj"
+    symbol = f"{prefix}{code}"
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{days},qfq"
+
+    for attempt in range(2):  # 最多2次尝试
+        try:
+            timeout = 10 if attempt == 1 else 8  # 重试时给更长超时
+            resp = _session.get(url, timeout=timeout)
+            df = _parse_tencent_kline_resp(resp.text, symbol)
+            if df is not None and len(df) >= 20:
+                _set_cache(cache_key, df)
+                return df.copy()
+            # 解析成功但数据不足，不重试
+            return pd.DataFrame()
+        except (requests.Timeout, requests.ConnectionError):
+            if attempt == 0:
+                continue  # 重试1次
+            return pd.DataFrame()
+        except Exception as e:
+            if attempt == 0:
+                continue
+            print(f"[数据] 腾讯K线 {code} 失败: {e}")
+            return pd.DataFrame()
+    return pd.DataFrame()
 
 
 def akshare_klines(code: str, days: int = 250) -> pd.DataFrame:
-    """akshare 日K线（备用）"""
+    """akshare 日K线（备用）— mini_racer不可用时直接跳过"""
+    # mini_racer 已卸载，akshare依赖它会报错，跳过避免5秒超时
+    try:
+        import py_mini_racer  # noqa: F401
+    except ImportError:
+        return pd.DataFrame()
+
     cache_key = f"akshare_kline_{code}_{days}"
     cached = _get_cached(cache_key)
     if cached is not None and isinstance(cached, pd.DataFrame):
@@ -165,7 +217,7 @@ def get_realtime_quote(code: str) -> dict | None:
     url = f"https://qt.gtimg.cn/q={prefix}{code}"
 
     try:
-        resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp = _session.get(url, timeout=5)
         resp.encoding = 'gbk'
         text = resp.text
         if "=" not in text:
@@ -274,38 +326,47 @@ def get_stock_list() -> pd.DataFrame:
 
     all_stocks = []
 
-    # 构建全市场secid列表（与v10_realtime_scan.py一致）
-    tc_codes = []
-    # 沪市主板 600000-609999
-    for i in range(600000, 610000):
-        tc_codes.append(f"sh{i:06d}")
-    # 深市主板 000001-003999
-    for i in range(1, 4000):
-        tc_codes.append(f"sz{i:06d}")
-    # 创业板 300000-309999
-    for i in range(300000, 310000):
-        tc_codes.append(f"sz{i:06d}")
+    # 沪深代码（密集号段，500/批高效）
+    shsz_codes = []
+    # 沪市主板 600000-605999 + 603000-603999（覆盖60xxxx主要号段）
+    for i in range(600000, 606000):
+        shsz_codes.append(f"sh{i:06d}")
+    for i in range(603000, 604000):
+        shsz_codes.append(f"sh{i:06d}")
+    # 深市主板 000001-004999
+    for i in range(1, 5000):
+        shsz_codes.append(f"sz{i:06d}")
+    # 创业板 300000-301999
+    for i in range(300000, 302000):
+        shsz_codes.append(f"sz{i:06d}")
     # 科创板 688000-689999
     for i in range(688000, 690000):
-        tc_codes.append(f"sh{i:06d}")
+        shsz_codes.append(f"sh{i:06d}")
 
-    # 批量拉取（每批200个，并行15线程加速）
-    batch_size = 200
-    batches = [tc_codes[i:i + batch_size] for i in range(0, len(tc_codes), batch_size)]
+    # 北交所代码（稀疏号段，800/批压缩空号开销）
+    bj_codes = []
+    for i in range(830000, 840000):
+        bj_codes.append(f"bj{i:06d}")
+    for i in range(870000, 874000):
+        bj_codes.append(f"bj{i:06d}")
+
+    # 批量拉取：沪深500/批 + 北交所800/批，20线程并行
+    shsz_batches = [shsz_codes[i:i + 500] for i in range(0, len(shsz_codes), 500)]
+    bj_batches = [bj_codes[i:i + 800] for i in range(0, len(bj_codes), 800)]
 
     def _fetch_batch(batch_codes):
         qs = ",".join(batch_codes)
         url = f"https://qt.gtimg.cn/q={qs}"
         try:
-            resp = requests.get(url, timeout=10, headers=HEADERS)
+            resp = _session.get(url, timeout=10)
             resp.encoding = 'gbk'
             return _parse_tencent_realtime_batch(resp.text)
         except Exception:
             return []
 
-    with ThreadPoolExecutor(max_workers=15) as pool:
-        results = pool.map(_fetch_batch, batches)
-        for parsed in results:
+    all_stocks = []
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        for parsed in pool.map(_fetch_batch, shsz_batches + bj_batches):
             all_stocks.extend(parsed)
 
     if not all_stocks:
@@ -323,8 +384,8 @@ def get_stock_list() -> pd.DataFrame:
 
     if all_stocks:
         df = pd.DataFrame(all_stocks)
-        # 基本过滤：去停牌/低价/无成交
-        df = df[(df["price"] > 3) & (df["volume"] > 0)]
+        # 基本过滤：只去掉停牌（无成交）的，保留低价股以统计完整市场
+        df = df[df["volume"] > 0]
         _set_cache(cache_key, df)
         print(f"[数据] 获取到 {len(df)} 只有效股票")
         return df.copy()
@@ -339,7 +400,7 @@ _INDEX_CODES = {
     "sh000001": "上证指数",
     "sz399001": "深证成指",
     "sz399006": "创业板指",
-    "sh000688": "科创综指",
+    "sh000688": "科创50",
 }
 
 
@@ -353,7 +414,7 @@ def get_market_indices() -> list[dict]:
     secids = ",".join(_INDEX_CODES.keys())
     url = f"https://qt.gtimg.cn/q={secids}"
     try:
-        resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp = _session.get(url, timeout=5)
         resp.encoding = 'gbk'
         text = resp.text
         results = []
@@ -419,7 +480,7 @@ def get_sector_ranking(limit: int = 30) -> list[dict]:
             "fields": "f2,f3,f4,f12,f14",
         }
         try:
-            resp = requests.get(url, params=params, timeout=10, headers=HEADERS)
+            resp = _session.get(url, params=params, timeout=10)
             data = resp.json()
             for item in data.get("data", {}).get("diff", []):
                 ranking.append({
@@ -452,7 +513,7 @@ def get_stock_sectors(code: str) -> list[str]:
         "pageSize": 30,
     }
     try:
-        resp = requests.get(url, params=params, timeout=10, headers=HEADERS)
+        resp = _session.get(url, params=params, timeout=10)
         data = resp.json()
         items = data.get("result", {}).get("data", [])
         sectors = [item.get("BOARD_NAME", "") for item in items if item.get("BOARD_NAME")]
@@ -515,7 +576,7 @@ def get_capital_flow(code: str) -> dict | None:
     prefix = "sh" if code.startswith("6") else "sz"
     url = f"https://qt.gtimg.cn/q={prefix}{code}"
     try:
-        resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp = _session.get(url, timeout=5)
         resp.encoding = 'gbk'
         text = resp.text
         if "=" in text:
@@ -617,7 +678,7 @@ def get_order_book(code: str) -> dict | None:
     # 买卖五档从完整行情接口获取（字段9-28）
     url = f"https://qt.gtimg.cn/q={prefix}{code}"
     try:
-        resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp = _session.get(url, timeout=5)
         resp.encoding = 'gbk'
         text = resp.text
         if "=" not in text:
@@ -653,7 +714,7 @@ def get_order_book(code: str) -> dict | None:
         # 委比数据（s_pk接口: 委比~委差~内盘比~外盘比）
         try:
             pk_url = f"https://qt.gtimg.cn/q=s_pk{prefix}{code}"
-            pk_resp = requests.get(pk_url, timeout=3, headers=HEADERS)
+            pk_resp = _session.get(pk_url, timeout=3)
             pk_resp.encoding = 'gbk'
             pk_text = pk_resp.text
             if "=" in pk_text:
@@ -682,7 +743,7 @@ def get_quote_brief(code: str) -> dict | None:
     prefix = "sh" if code.startswith("6") else "sz"
     url = f"https://qt.gtimg.cn/q=s_{prefix}{code}"
     try:
-        resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp = _session.get(url, timeout=5)
         resp.encoding = 'gbk'
         text = resp.text
         if "=" not in text:

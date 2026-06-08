@@ -107,11 +107,119 @@ def fetch_hot_sectors(top_n=15):
         return []
 
 
+def fetch_market_breadth():
+    """
+    获取全市场涨跌统计（涨/跌/平/涨停/跌停家数）。
+    优先使用东方财富ulist.np接口（含涨跌家数），降级用腾讯行情统计。
+    """
+    # 方案1: 东方财富 ulist.np 接口 —— 直接返回四大指数的涨跌家数
+    try:
+        url = (
+            "https://push2.eastmoney.com/api/qt/ulist.np/get"
+            "?fields=f2,f3,f12,f14,f104,f105,f106"
+            "&secids=1.000001,0.399001,0.399006,1.000688"
+        )
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=8)
+        data = json.loads(resp.read().decode())
+        diff = data.get("data", {}).get("diff", [])
+        if diff:
+            # 各指数的涨跌家数，去重合并（上证+深证覆盖全A股）
+            # 上证指数 f104/f105/f106 = 沪市涨跌平
+            # 深证成指 f104/f105/f106 = 深市涨跌平
+            # 创业板/科创50是深证/上证的子集，不要重复计算
+            breadth = {
+                "sh_up": 0, "sh_down": 0, "sh_flat": 0,
+                "sz_up": 0, "sz_down": 0, "sz_flat": 0,
+                "source": "eastmoney-ulist",
+            }
+            for d in diff:
+                code = d.get("f12", "")
+                up = d.get("f104", 0) or 0
+                down = d.get("f105", 0) or 0
+                flat = d.get("f106", 0) or 0
+                if code == "000001":  # 上证指数 -> 沪市
+                    breadth["sh_up"] = up
+                    breadth["sh_down"] = down
+                    breadth["sh_flat"] = flat
+                elif code == "399001":  # 深证成指 -> 深市
+                    breadth["sz_up"] = up
+                    breadth["sz_down"] = down
+                    breadth["sz_flat"] = flat
+            # 创业板/科创50涨跌家数单独存，不合并到总计
+            for d in diff:
+                code = d.get("f12", "")
+                up = d.get("f104", 0) or 0
+                down = d.get("f105", 0) or 0
+                flat = d.get("f106", 0) or 0
+                if code == "399006":  # 创业板
+                    breadth["cyb_up"] = up
+                    breadth["cyb_down"] = down
+                    breadth["cyb_flat"] = flat
+                elif code == "000688":  # 科创50
+                    breadth["kc_up"] = up
+                    breadth["kc_down"] = down
+                    breadth["kc_flat"] = flat
+            # 全市场汇总（沪+深去重）
+            breadth["total_up"] = breadth["sh_up"] + breadth["sz_up"]
+            breadth["total_down"] = breadth["sh_down"] + breadth["sz_down"]
+            breadth["total_flat"] = breadth["sh_flat"] + breadth["sz_flat"]
+            breadth["total"] = breadth["total_up"] + breadth["total_down"] + breadth["total_flat"]
+            print(f"✅ 市场宽度(东财): 涨{breadth['total_up']} 跌{breadth['total_down']} 平{breadth['total_flat']} 总{breadth['total']}")
+            return breadth
+    except Exception as e:
+        print(f"⚠️ 东财涨跌统计失败: {e}", file=sys.stderr)
+
+    # 方案2: 从新浪获取各市场股票总数
+    try:
+        total_sh = total_sz = 0
+        for node in [("sh_a", "sh"), ("sz_a", "sz")]:
+            url = f"https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount?node={node[0]}"
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://finance.sina.com.cn/",
+            })
+            resp = urllib.request.urlopen(req, timeout=6)
+            count_str = resp.read().decode().strip().strip('"')
+            try:
+                count = int(count_str)
+            except (ValueError, TypeError):
+                count = 0
+            if node[1] == "sh":
+                total_sh = count
+            else:
+                total_sz = count
+        # hs_a 包含全部A股（含北交所），减去沪深就是北交所数量
+        total_hs = 0
+        try:
+            url_hs = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount?node=hs_a"
+            req_hs = urllib.request.Request(url_hs, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://finance.sina.com.cn/",
+            })
+            resp_hs = urllib.request.urlopen(req_hs, timeout=6)
+            count_hs = resp_hs.read().decode().strip().strip('"')
+            total_hs = int(count_hs)
+        except (ValueError, TypeError, Exception):
+            pass
+        total_bj = max(total_hs - total_sh - total_sz, 0) if total_hs > 0 else 0
+        breadth = {
+            "sh_total": total_sh,
+            "sz_total": total_sz,
+            "bj_total": total_bj,
+            "total": max(total_hs, total_sh + total_sz + total_bj),
+            "source": "sina-count-only",
+        }
+        print(f"✅ 市场宽度(新浪): 沪{total_sh}+深{total_sz}+北{total_bj}={breadth['total']}")
+        return breadth
+    except Exception as e:
+        print(f"⚠️ 新浪涨跌统计失败: {e}", file=sys.stderr)
+
+    return {"source": "unavailable"}
+
+
 def tencent_batch_quote(codes):
     """批量获取腾讯实时行情，codes是股票代码列表(如['600203','300410'])"""
-    if not codes:
-        return {}
-    
     # 构建secid列表
     secids = []
     for c in codes:
@@ -120,8 +228,11 @@ def tencent_batch_quote(codes):
         else:
             secids.append(f"sz{c}")
     
-    # 加上三大指数
-    secids.extend(['sh000001', 'sz399001', 'sz399006'])
+    # 加上四大指数（始终查询，即使codes为空）
+    secids.extend(['sh000001', 'sz399001', 'sz399006', 'sh000688'])
+    
+    if not secids:
+        return {}
     
     # 批量查询（每批最多80个）
     results = {}
@@ -172,7 +283,14 @@ def parse_tencent_batch(output):
                     return default
             
             # 判断是指数还是个股
-            is_index = code in ['000001', '399001', '399006']
+            is_index = code in ['000001', '399001', '399006', '000688']
+            
+            # 对指数，amount从parts[35]第三段提取（真实成交额元），个股parts[37]是万元
+            if is_index and len(parts) > 35:
+                combo = parts[35].split('/')
+                amount_val = float(combo[2]) if len(combo) >= 3 and combo[2] else safe_float(37)
+            else:
+                amount_val = safe_float(37)  # 万元
             
             stocks[code] = {
                 "secid": secid,
@@ -188,7 +306,7 @@ def parse_tencent_batch(output):
                 "change_pct": safe_float(32),
                 "high": safe_float(33),
                 "low": safe_float(34),
-                "amount": safe_float(37),  # 万元
+                "amount": amount_val,  # 指数:元 个股:万元
                 "turnover_rate": safe_float(38),
                 "pe_dynamic": safe_float(39) if not is_index else 0,
                 "circ_market_cap": safe_float(44),  # 流通市值(亿)
@@ -289,9 +407,13 @@ def main():
     else:
         print("⚠️ 热点板块数据为空")
     
+    # Step 2.7: 获取市场涨跌统计
+    print("⏳ 获取市场涨跌统计...")
+    market_breadth = fetch_market_breadth()
+    
     # 提取指数数据
     index_data = {}
-    for idx_code in ['000001', '399001', '399006']:
+    for idx_code in ['000001', '399001', '399006', '000688']:
         if idx_code in quotes:
             q = quotes[idx_code]
             index_data[f"{'sh' if idx_code.startswith('0') else 'sz'}{idx_code}"] = {
@@ -377,6 +499,7 @@ def main():
             "source": "10jqka-thshy",
         },
         "index": index_data,
+        "market_breadth": market_breadth,
     }
     
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -386,15 +509,42 @@ def main():
     print(f"✅ 预取完成: {len(candidates)}只候选股，写入 {OUTPUT_PATH}")
     print(f"📊 大盘: {index_data.get('sh000001', {}).get('price', 'N/A')} ({index_data.get('sh000001', {}).get('change_pct', 'N/A')}%)")
 
+def fetch_index_data():
+    """单独获取三大指数行情，返回 index_data dict"""
+    try:
+        quotes = tencent_batch_quote([])  # codes为空也会查指数(内部追加)
+    except Exception as e:
+        print(f"⚠️ 获取指数行情失败: {e}", file=sys.stderr)
+        return {}
+    index_data = {}
+    for idx_code in ['000001', '399001', '399006', '000688']:
+        if idx_code in quotes:
+            q = quotes[idx_code]
+            index_data[f"{'sh' if idx_code.startswith('0') else 'sz'}{idx_code}"] = {
+                "name": q["name"],
+                "price": q["current_price"],
+                "change_pct": q["change_pct"],
+                "amount": q["amount"],
+            }
+    if index_data:
+        print(f"📊 大盘指数: {index_data.get('sh000001', {}).get('price', 'N/A')} ({index_data.get('sh000001', {}).get('change_pct', 'N/A')}%)")
+    else:
+        print("⚠️ 大盘指数数据为空", file=sys.stderr)
+    return index_data
+
+
 def write_empty_cache(reason="", scan_date=""):
-    """写入空缓存（0信号场景）"""
+    """写入空缓存（0信号场景），但仍尝试获取指数和市场宽度数据"""
+    index_data = fetch_index_data()
+    market_breadth = fetch_market_breadth()
     output = {
         "prefetch_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "scan_date": scan_date,
         "signals": {"full_buy": [], "strong_buy": [], "base_buy": []},
         "candidates": {},
         "sectors": {"trending_sectors": [], "concepts": []},
-        "index": {},
+        "index": index_data,
+        "market_breadth": market_breadth,
         "_note": reason,
     }
     os.makedirs(CACHE_DIR, exist_ok=True)

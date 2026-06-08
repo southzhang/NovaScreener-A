@@ -35,15 +35,16 @@ freshness = data["freshness"]
 st.html('<h2 style="margin-top:0;">📊 大盘指数概览</h2>')
 
 index_data = prefetch.get("index", {})
-# 按常见顺序排列: 上证 / 深证 / 创业板
-INDEX_ORDER = ["sh000001", "sz399001", "sz399006"]
+# 按常见顺序排列: 上证 / 深证 / 创业板 / 科创50
+INDEX_ORDER = ["sh000001", "sz399001", "sz399006", "sh000688"]
 INDEX_DEFAULTS = {
     "sh000001": {"name": "上证指数", "price": 0, "change_pct": 0, "amount": 0},
     "sz399001": {"name": "深证成指", "price": 0, "change_pct": 0, "amount": 0},
     "sz399006": {"name": "创业板指", "price": 0, "change_pct": 0, "amount": 0},
+    "sh000688": {"name": "科创50", "price": 0, "change_pct": 0, "amount": 0},
 }
 
-idx_cols = st.columns(3)
+idx_cols = st.columns(4)
 for i, key in enumerate(INDEX_ORDER):
     idx = index_data.get(key, INDEX_DEFAULTS.get(key, {}))
     name = idx.get("name", INDEX_DEFAULTS.get(key, {}).get("name", key))
@@ -82,6 +83,132 @@ for i, key in enumerate(INDEX_ORDER):
             <div style="color:var(--text-secondary); font-size:0.8em; margin-top:4px;">
                 成交额 {amt_str}
             </div>
+        </div>
+        """)
+
+# ===================================================================
+# 1.5. 市场宽度统计
+# ===================================================================
+breadth = prefetch.get("market_breadth", {})
+if breadth and breadth.get("source") != "unavailable":
+    st.html('<h2>📈 市场宽度</h2>')
+    
+    total_up = breadth.get("total_up", 0)
+    total_down = breadth.get("total_down", 0)
+    total_flat = breadth.get("total_flat", 0)
+    total = breadth.get("total", 0)
+    
+    if total > 0:
+        up_pct = total_up / total * 100
+        down_pct = total_down / total * 100
+        flat_pct = total_flat / total * 100
+        
+        # 涨跌比例条
+        st.html(f"""
+        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:10px; padding:14px 18px; margin-bottom:12px;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+                <span style="font-weight:700; color:#ff4b4b;">🔴 上涨 {total_up}</span>
+                <span style="color:var(--text-secondary);">⬜ 平盘 {total_flat}</span>
+                <span style="font-weight:700; color:#00c853;">🟢 下跌 {total_down}</span>
+            </div>
+            <div style="display:flex; height:24px; border-radius:6px; overflow:hidden; background:var(--border-color);">
+                <div style="width:{up_pct:.1f}%; background:#ff4b4b; min-width:2px; border-radius:6px 0 0 6px;"></div>
+                <div style="width:{flat_pct:.1f}%; background:#888; min-width:1px;"></div>
+                <div style="width:{down_pct:.1f}%; background:#00c853; min-width:2px; border-radius:0 6px 6px 0;"></div>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.82em; color:var(--text-secondary);">
+                <span>{up_pct:.1f}%</span>
+                <span>共 {total} 家</span>
+                <span>{down_pct:.1f}%</span>
+            </div>
+        </div>
+        """)
+        
+        # 分市场明细
+        sh_up = breadth.get("sh_up", 0)
+        sh_down = breadth.get("sh_down", 0)
+        sh_flat = breadth.get("sh_flat", 0)
+        sz_up = breadth.get("sz_up", 0)
+        sz_down = breadth.get("sz_down", 0)
+        sz_flat = breadth.get("sz_flat", 0)
+        
+        if sh_up or sz_up:
+            detail_cols = st.columns(2)
+            with detail_cols[0]:
+                sh_total = sh_up + sh_down + sh_flat
+                st.html(f"""
+                <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px; text-align:center;">
+                    <div style="font-weight:600; color:var(--text-primary); margin-bottom:4px;">沪市 <span style="color:var(--text-secondary); font-weight:400;">{sh_total}家</span></div>
+                    <span style="color:#ff4b4b; font-weight:600;">{sh_up}涨</span>
+                    <span style="color:var(--text-secondary); margin:0 6px;">{sh_flat}平</span>
+                    <span style="color:#00c853; font-weight:600;">{sh_down}跌</span>
+                </div>
+                """)
+            with detail_cols[1]:
+                sz_total = sz_up + sz_down + sz_flat
+                st.html(f"""
+                <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px; text-align:center;">
+                    <div style="font-weight:600; color:var(--text-primary); margin-bottom:4px;">深市 <span style="color:var(--text-secondary); font-weight:400;">{sz_total}家</span></div>
+                    <span style="color:#ff4b4b; font-weight:600;">{sz_up}涨</span>
+                    <span style="color:var(--text-secondary); margin:0 6px;">{sz_flat}平</span>
+                    <span style="color:#00c853; font-weight:600;">{sz_down}跌</span>
+                </div>
+                """)
+        
+        # 创业板/科创50 明细
+        cyb_up = breadth.get("cyb_up", 0)
+        cyb_down = breadth.get("cyb_down", 0)
+        kc_up = breadth.get("kc_up", 0)
+        kc_down = breadth.get("kc_down", 0)
+        if cyb_up or kc_up:
+            sub_cols = st.columns(2)
+            if cyb_up:
+                cyb_flat = breadth.get("cyb_flat", 0)
+                cyb_total = cyb_up + cyb_down + cyb_flat
+                with sub_cols[0]:
+                    st.html(f"""
+                    <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px 14px; text-align:center; font-size:0.9em;">
+                        <span style="color:var(--text-primary);">创业板</span>
+                        <span style="color:var(--text-secondary); margin-left:4px;">{cyb_total}家</span>
+                        <span style="color:#ff4b4b; margin-left:8px;">{cyb_up}涨</span>
+                        <span style="color:#00c853; margin-left:8px;">{cyb_down}跌</span>
+                    </div>
+                    """)
+            if kc_up:
+                kc_flat = breadth.get("kc_flat", 0)
+                kc_total = kc_up + kc_down + kc_flat
+                with sub_cols[1]:
+                    st.html(f"""
+                    <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px 14px; text-align:center; font-size:0.9em;">
+                        <span style="color:var(--text-primary);">科创板</span>
+                        <span style="color:var(--text-secondary); margin-left:4px;">{kc_total}家</span>
+                        <span style="color:#ff4b4b; margin-left:8px;">{kc_up}涨</span>
+                        <span style="color:#00c853; margin-left:8px;">{kc_down}跌</span>
+                    </div>
+                    """)
+    elif breadth.get("total", 0) > 0:
+        # 只有总数没有涨跌分布（新浪降级模式）
+        total_only = breadth["total"]
+        sh_total = breadth.get("sh_total", 0)
+        sz_total = breadth.get("sz_total", 0)
+        bj_total = breadth.get("bj_total", 0)
+        # 分市场卡片
+        market_parts = []
+        if sh_total:
+            market_parts.append(f"沪市 {sh_total}")
+        if sz_total:
+            market_parts.append(f"深市 {sz_total}")
+        if bj_total:
+            market_parts.append(f"北交所 {bj_total}")
+        market_str = " · ".join(market_parts)
+        st.html(f"""
+        <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:10px; padding:14px 18px; margin-bottom:12px; text-align:center;">
+            <div style="margin-bottom:6px;">
+                <span style="color:var(--text-secondary);">A股上市公司共</span>
+                <span style="font-weight:700; color:var(--text-primary); font-size:1.3em; margin:0 6px;">{total_only}</span>
+                <span style="color:var(--text-secondary);">家</span>
+            </div>
+            <div style="color:var(--text-secondary); font-size:0.85em;">{market_str}</div>
         </div>
         """)
 

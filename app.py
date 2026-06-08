@@ -130,6 +130,23 @@ st.html("""
 st.subheader("🏛️ 市场概览")
 _df_market = get_stock_list()  # 只拉一次！
 
+def _make_breadth_bar(up_pct, down_pct, flat_pct, up, down, flat, total):
+    """生成涨跌比例条HTML"""
+    return f"""
+    <div style="background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:10px 14px; margin-top:8px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:0.82em;">
+            <span style="color:#ef4444; font-weight:600;">🔴 上涨 {up} ({up_pct:.1f}%)</span>
+            <span style="color:var(--text-muted);">平盘 {flat}</span>
+            <span style="color:#22c55e; font-weight:600;">🟢 下跌 {down} ({down_pct:.1f}%)</span>
+        </div>
+        <div style="display:flex; height:16px; border-radius:4px; overflow:hidden; background:var(--border-color);">
+            <div style="width:{up_pct:.1f}%; background:#ef4444; min-width:2px;"></div>
+            <div style="width:{flat_pct:.1f}%; background:#888; min-width:1px;"></div>
+            <div style="width:{down_pct:.1f}%; background:#22c55e; min-width:2px;"></div>
+        </div>
+    </div>
+    """
+
 # 四大指数实时行情
 _indices = get_market_indices()
 if _indices:
@@ -149,32 +166,52 @@ if _indices:
 
 overview = get_market_overview(df=_df_market)
 
+_total = overview.get("total", 0)
+_up = overview.get("up", 0)
+_down = overview.get("down", 0)
+_flat = overview.get("flat", 0)
+_limit_up = overview.get("limit_up", 0)
+_limit_down = overview.get("limit_down", 0)
+_up_ratio = overview.get("up_ratio", 0)
+_down_ratio = overview.get("down_ratio", 0)
+
+# 涨跌比例条
+_up_pct = _up / _total * 100 if _total > 0 else 0
+_down_pct = _down / _total * 100 if _total > 0 else 0
+_flat_pct = _flat / _total * 100 if _total > 0 else 0
+
 _mkt_html = f"""
 <div style="display:flex; gap:12px; flex-wrap:wrap;">
   <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">总股票数</div>
-    <div style="font-size:1.6em; font-weight:700;">{overview.get("total", 0)}</div>
+    <div style="font-size:1.6em; font-weight:700;">{_total}</div>
   </div>
   <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">上涨</div>
-    <div style="font-size:1.6em; font-weight:700; color:#ef4444;">{overview.get("up", 0)}</div>
-    <div style="color:#ef4444; font-size:0.85em;">▲ {overview.get("up_ratio", 0)}%</div>
+    <div style="font-size:1.6em; font-weight:700; color:#ef4444;">{_up}</div>
+    <div style="color:#ef4444; font-size:0.85em;">▲ {_up_ratio}%</div>
+  </div>
+  <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
+    <div style="color:var(--text-muted); font-size:0.85em;">平盘</div>
+    <div style="font-size:1.6em; font-weight:700;">{_flat}</div>
   </div>
   <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">下跌</div>
-    <div style="font-size:1.6em; font-weight:700; color:#22c55e;">{overview.get("down", 0)}</div>
+    <div style="font-size:1.6em; font-weight:700; color:#22c55e;">{_down}</div>
+    <div style="color:#22c55e; font-size:0.85em;">▼ {_down_ratio}%</div>
   </div>
   <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">涨停</div>
-    <div style="font-size:1.6em; font-weight:700; color:#ef4444;">{overview.get("limit_up", 0)}</div>
+    <div style="font-size:1.6em; font-weight:700; color:#ef4444;">{_limit_up}</div>
     <div style="color:#ef4444; font-size:0.85em;">家</div>
   </div>
   <div style="flex:1; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:10px; padding:14px; text-align:center;">
     <div style="color:var(--text-muted); font-size:0.85em;">跌停</div>
-    <div style="font-size:1.6em; font-weight:700; color:#22c55e;">{overview.get("limit_down", 0)}</div>
+    <div style="font-size:1.6em; font-weight:700; color:#22c55e;">{_limit_down}</div>
     <div style="color:#22c55e; font-size:0.85em;">家</div>
   </div>
 </div>
+{_make_breadth_bar(_up_pct, _down_pct, _flat_pct, _up, _down, _flat, _total) if _total > 0 else ''}
 """
 st.html(_mkt_html)
 

@@ -131,7 +131,7 @@ def scan_market(
     strategy_keys: list[str],
     params_dict: dict[str, dict] | None = None,
     stock_pool: list[str] | None = None,
-    max_workers: int = 10,
+    max_workers: int = 25,
     progress_callback=None,
     apply_filters: bool = True,
 ) -> list[dict]:
@@ -144,7 +144,7 @@ def scan_market(
         strategy_keys: 策略列表
         params_dict: 策略参数
         stock_pool: 股票池（None=全市场）
-        max_workers: 并发数
+        max_workers: 并发数（默认25，腾讯K线API甜区）
         progress_callback: 进度回调
         apply_filters: 是否应用资金面/基本面过滤
     """
@@ -244,6 +244,8 @@ def get_market_overview(df: pd.DataFrame | None = None) -> dict:
 
     up_count = len(df[df["pct_change"] > 0])
     down_count = len(df[df["pct_change"] < 0])
+    flat_count = len(df[df["pct_change"] == 0])
+    total = len(df)
 
     # 优先用精确涨跌停价判断，降级到涨跌幅近似
     if "limit_up" in df.columns and "limit_down" in df.columns and "price" in df.columns:
@@ -258,10 +260,12 @@ def get_market_overview(df: pd.DataFrame | None = None) -> dict:
         limit_down = len(df[df["pct_change"] <= -9.9])
 
     return {
-        "total": len(df),
+        "total": total,
         "up": up_count,
         "down": down_count,
+        "flat": flat_count,
         "limit_up": limit_up,
         "limit_down": limit_down,
-        "up_ratio": round(up_count / len(df) * 100, 1) if len(df) > 0 else 0,
+        "up_ratio": round(up_count / total * 100, 1) if total > 0 else 0,
+        "down_ratio": round(down_count / total * 100, 1) if total > 0 else 0,
     }

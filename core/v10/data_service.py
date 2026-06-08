@@ -98,8 +98,9 @@ def get_prefetch() -> dict:
         {
             "candidates": {code: {...}},  # 候选股详情
             "sectors": {...},             # 板块数据
-            "index": {...},               # 三大指数
+            "index": {...},               # 四大指数
             "signals": {...},             # 信号分组
+            "market_breadth": {...},       # 市场宽度（涨跌家数）
             "prefetch_time": str,         # 预取时间
             "_fetch_failed": bool,        # 降级标记
         }
