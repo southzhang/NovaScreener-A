@@ -1,4 +1,5 @@
 """推荐追踪页面 — 胜率仪表盘 · 冷静期 · 历史推荐 · 验证操作"""
+import time
 import streamlit as st
 import pandas as pd
 from core.ui import inject_global_css, render_theme_toggle, render_page_header
@@ -277,29 +278,17 @@ TRACKER_SCRIPT = os.path.join(PROJECT_DIR, "core", "v10", "tail_rec_tracker.py")
 col1, col2 = st.columns([1, 2])
 with col1:
     if st.button("▶️ 执行验证 (Validate)", type="primary", use_container_width=True):
-        import time as _time
-        _debug_log = f"[{_time.strftime('%H:%M:%S')}] 验证按钮被点击"
         st.write("⏳ 正在验证历史推荐数据，请稍候...")
         try:
             result = _run_script(TRACKER_SCRIPT, "推荐追踪验证", extra_args=["validate"], timeout=60)
-            _debug_log += f" → success={result.get('success')}, desc={result.get('description','')}"
-        except Exception as _e:
-            result = {"success": False, "description": f"异常: {_e}", "stdout": "", "stderr": str(_e)}
-            _debug_log += f" → 异常: {_e}"
-        # 写调试日志
-        import os as _os
-        _log_path = _os.path.join(_os.path.expanduser("~"), ".hermes", "cache", "validate_debug.log")
-        try:
-            with open(_log_path, "a") as _f:
-                _f.write(_debug_log + "\n")
-        except Exception:
-            pass
+        except Exception as e:
+            result = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
         if result.get("success"):
             st.success(f"✅ {result.get('description', '验证完成')}")
             if result.get("stdout"):
                 st.code(result["stdout"][-500:], language="log")
             st.balloons()
-            _time.sleep(2)  # 让用户看到成功消息
+            time.sleep(2)
             st.rerun()
         else:
             st.error(f"❌ {result.get('description', '验证失败')}")
