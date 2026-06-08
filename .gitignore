@@ -3,7 +3,8 @@ __pycache__/
 .env
 data/
 *.db
-.streamlit/
+.streamlit/*
+!.streamlit/config.toml
 build/
 dist/
 *.spec

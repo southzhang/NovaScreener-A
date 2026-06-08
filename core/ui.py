@@ -256,7 +256,10 @@ GLOBAL_CSS = """
     /* ========== 隐藏元素 ========== */
     #MainMenu, footer { visibility: hidden; }
     .stDeployButton { display: none; }
-    /* toolbarMode=viewer 已隐藏顶栏按钮，不再隐藏header以保留侧边栏折叠按钮 */
+    /* Streamlit 1.58 折叠按钮默认 hover 才显示，强制始终可见 */
+    [data-testid="stSidebarCollapseButton"] {
+        visibility: visible !important;
+    }
     .block-container { padding-top: 1rem; }
 
     /* ========== 侧边栏导航菜单强制文字色 ========== */
@@ -639,7 +642,10 @@ def inject_global_css():
     /* ========== 隐藏元素 ========== */
     #MainMenu, footer {{ visibility: hidden; }}
     .stDeployButton {{ display: none; }}
-    /* toolbarMode=viewer 已隐藏顶栏按钮，不再隐藏header以保留侧边栏折叠按钮 */
+    /* Streamlit 1.58 折叠按钮默认 hover 才显示，强制始终可见 */
+    [data-testid="stSidebarCollapseButton"] {{
+        visibility: visible !important;
+    }}
     .block-container {{ padding-top: 1rem; }}
 
     /* ========== 侧边栏导航菜单强制文字色 ========== */
