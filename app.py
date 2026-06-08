@@ -224,9 +224,13 @@ with col2:
     _scan_clicked = st.button("🚀 快速扫描", type="primary")
 
 if _scan_clicked:
-    with st.spinner("扫描中...（粗筛+精扫）"):
+    st.write("⏳ 扫描中...（粗筛+精扫）")
+    try:
         _ = scan_market(["v10_full"], max_workers=25)
-    st.success("扫描完成！结果已更新到下方列表")
+    except Exception as e:
+        st.error(f"❌ 扫描异常: {e}")
+    else:
+        st.success("扫描完成！结果已更新到下方列表")
 
 # 显示今天的信号（扫描结果自动存入数据库，统一从此读取）
 signals = get_signals(limit=50)
