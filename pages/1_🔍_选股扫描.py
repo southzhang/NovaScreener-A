@@ -429,22 +429,26 @@ if st.button("🚀 开始扫描", type="primary", width='stretch'):
     if not all_selected:
         st.warning("请至少选择一个策略！")
     else:
-        with st.spinner("正在扫描中...V10全市场扫描约需3-8分钟"):
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+        st.write("⏳ 正在扫描中...V10全市场扫描约需1-2分钟")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
 
-            def on_progress(current, total):
-                pct = min(current / total, 1.0) if total > 0 else 0
-                progress_bar.progress(pct)
-                status_text.text(f"扫描进度: {current}/{total} ({pct*100:.0f}%)")
+        def on_progress(current, total):
+            pct = min(current / total, 1.0) if total > 0 else 0
+            progress_bar.progress(pct)
+            status_text.text(f"扫描进度: {current}/{total} ({pct*100:.0f}%)")
 
+        try:
             if scan_mode == "自选股":
                 results = scan_watchlist(all_selected, params_dict)
             else:
-                results = scan_market(all_selected, params_dict, max_workers=20, progress_callback=on_progress)
+                results = scan_market(all_selected, params_dict, max_workers=25, progress_callback=on_progress)
+        except Exception as e:
+            results = []
+            st.error(f"❌ 扫描异常: {e}")
 
-            progress_bar.progress(1.0)
-            status_text.text("扫描完成！")
+        progress_bar.progress(1.0)
+        status_text.text("扫描完成！")
 
         # 存入session_state
         st.session_state["scan_results"] = results

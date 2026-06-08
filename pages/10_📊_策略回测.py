@@ -89,8 +89,8 @@ if st.button("🚀 开始回测", type="primary", width='stretch'):
         st.error("请输入股票代码")
         st.stop()
 
-    with st.spinner(f"正在获取 {stock_code} {period_display}数据..."):
-        df = get_kline(stock_code, period=period, count=lookback)
+    st.write(f"⏳ 正在获取 {stock_code} {period_display}数据...")
+    df = get_kline(stock_code, period=period, count=lookback)
 
     if df is None or df.empty:
         st.error(f"获取 {stock_code} K线数据失败")
@@ -103,22 +103,22 @@ if st.button("🚀 开始回测", type="primary", width='stretch'):
     volume = df["volume"].values.astype(float)
     open_price = df["open"].values.astype(float)
 
-    with st.spinner(f"正在回测 {strategy_display} 策略（{len(close)}根K线）..."):
-        result = run_backtest(
-            stock_code=stock_code,
-            stock_name=stock_name,
-            strategy_key=strategy_key,
-            dates=dates,
-            close=close,
-            high=high,
-            low=low,
-            volume=volume,
-            open_price=open_price,
-            stop_loss_pct=stop_loss,
-            take_profit_pct=take_profit,
-            max_hold_bars=max_hold,
-            use_signal_exit=use_signal_exit,
-        )
+    st.write(f"⏳ 正在回测 {strategy_display} 策略（{len(close)}根K线）...")
+    result = run_backtest(
+        stock_code=stock_code,
+        stock_name=stock_name,
+        strategy_key=strategy_key,
+        dates=dates,
+        close=close,
+        high=high,
+        low=low,
+        volume=volume,
+        open_price=open_price,
+        stop_loss_pct=stop_loss,
+        take_profit_pct=take_profit,
+        max_hold_bars=max_hold,
+        use_signal_exit=use_signal_exit,
+    )
 
     st.session_state["bt_result"] = result
     st.session_state["bt_df"] = df

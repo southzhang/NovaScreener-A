@@ -1,4 +1,5 @@
 """尾盘选股页面 — 大盘指数 · 信号概览 · 候选详情 · 板块热度 · 操作按钮"""
+import time
 import streamlit as st
 import pandas as pd
 from datetime import datetime, time as dt_time
@@ -545,38 +546,51 @@ elif _prefetch_time:
 btn_cols = st.columns(3)
 with btn_cols[0]:
     if st.button("📥 一键预取", type="primary", use_container_width=True):
-        with st.spinner("正在预取尾盘数据..."):
+        st.write("⏳ 正在预取尾盘数据...")
+        try:
             result = run_prefetch()
-        if result["success"]:
+        except Exception as e:
+            result = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
+        if result.get("success"):
             stdout = result.get("stdout", "")
             if "空缓存" in stdout or "非交易" in stdout:
                 st.warning(f"⚠️ 预取完成但写入了空缓存（可能非交易时间）\n{stdout.strip()}")
             else:
                 st.success("✅ 尾盘预取成功")
+                time.sleep(1)
                 st.rerun()
         else:
-            st.error(f"❌ {result['description']}")
+            st.error(f"❌ {result.get('description', '预取失败')}")
 
 with btn_cols[1]:
     if st.button("📝 一键汇总", type="primary", use_container_width=True):
-        with st.spinner("正在生成尾盘摘要..."):
+        st.write("⏳ 正在生成尾盘摘要...")
+        try:
             result = run_summary()
-        if result["success"]:
+        except Exception as e:
+            result = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
+        if result.get("success"):
             st.success("✅ 尾盘摘要生成成功")
+            time.sleep(1)
             st.rerun()
         else:
-            st.error(f"❌ {result['description']}")
+            st.error(f"❌ {result.get('description', '汇总失败')}")
 
 with btn_cols[2]:
     if st.button("🔍 一键全扫描", type="primary", use_container_width=True):
-        with st.spinner("正在运行V10全市场扫描（约2-5分钟），请耐心等待..."):
+        st.write("⏳ 正在运行V10全市场扫描，请耐心等待...")
+        try:
             result = run_scan()
-        if result["success"]:
+        except Exception as e:
+            result = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
+        if result.get("success"):
             st.success("✅ V10全市场扫描完成")
+            st.balloons()
+            time.sleep(2)
             st.rerun()
         else:
             stderr = result.get("stderr", "")
-            st.error(f"❌ {result['description']}")
+            st.error(f"❌ {result.get('description', '扫描失败')}")
             if stderr:
                 with st.expander("查看错误详情"):
                     st.code(stderr[-500:])
