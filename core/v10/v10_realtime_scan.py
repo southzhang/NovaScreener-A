@@ -325,14 +325,14 @@ def _parse_tencent_realtime(raw):
         high = float(parts[33]) if parts[33] else 0
         low = float(parts[34]) if parts[34] else 0
         change = float(parts[32]) if parts[32] else 0
-        volume = float(parts[6]) if parts[6] else 0
-        amount = float(parts[37]) if parts[37] else 0
+        volume = float(parts[36]) if parts[36] else 0     # 成交量(手)
+        amount = float(parts[37]) if parts[37] else 0     # 成交额(万元)
         result.append({
             'code': code, 'name': name,
             'symbol': f"{'sh' if code.startswith('6') else 'sz'}{code}",
             'price': price, 'yclose': yclose, 'open': open_p,
             'high': high, 'low': low, 'change': change,
-            'volume': volume * 100, 'amount': amount,
+            'volume': volume, 'amount': amount,
         })
     return result
 
@@ -1021,12 +1021,17 @@ def _scan_one_rt(stock):
 # ====== 主流程 ======
 
 def main():
-    # 交易时间检查 — 非交易时间直接退出
+    # 交易时间检查 — 非交易时间+无--force时退出
+    force = "--force" in sys.argv
     now = datetime.now()
     h, m = now.hour, now.minute
     t = h * 100 + m
-    if not ((915 <= t <= 925) or (930 <= t <= 1130) or (1300 <= t <= 1500)):
+    is_trading = (915 <= t <= 925) or (930 <= t <= 1130) or (1300 <= t <= 1500)
+    if not is_trading and not force:
+        print("⛔ 非交易时间，跳过扫描。使用 --force 强制执行", file=sys.stderr)
         return
+    if not is_trading and force:
+        print("⚠️ 非交易时间，但 --force 强制执行", file=sys.stderr)
 
     time_str = now.strftime('%H:%M:%S')
     date_str = now.strftime('%Y-%m-%d')

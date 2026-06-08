@@ -35,32 +35,64 @@ def get_holdings():
 
 
 def fetch_tencent_quote(codes):
-    """批量获取腾讯行情"""
+    """批量获取腾讯行情 + 资金流向(ff_接口，降级到普通行情parts[50])"""
     code_str = ",".join(
         [f"sh{c}" if c.startswith("6") else f"sz{c}" for c in codes]
     )
-    url = f"https://qt.gtimg.cn/q={code_str}"
+    # 同时请求行情和资金流向(ff_前缀)
+    ff_codes = ",".join(
+        [f"ff_sh{c}" if c.startswith("6") else f"ff_sz{c}" for c in codes]
+    )
+    url = f"https://qt.gtimg.cn/q={code_str},{ff_codes}"
     req = urllib.request.Request(url)
     req.add_header("Referer", "https://qt.gtimg.cn")
+    req.add_header("User-Agent", "Mozilla/5.0")
     try:
         resp = urllib.request.urlopen(req, timeout=10)
-        raw = resp.read().decode("gbk")
+        raw = resp.read().decode("gbk", errors="ignore")
     except Exception as e:
         print(f"腾讯行情请求失败: {e}")
         return {}
 
-    results = {}
+    # 先解析ff_资金流向
+    ff_inflow = {}  # code -> main_inflow
     for line in raw.strip().split("\n"):
         line = line.strip()
-        if not line.startswith("v_"):
+        if not line.startswith("v_ff_"):
             continue
         m = re.search(r'=(.+?);?$', line)
         if not m:
             continue
         parts = m.group(1).strip('"').split("~")
-        if len(parts) < 71:
+        if len(parts) < 4:
+            continue
+        code = parts[2] if len(parts) > 2 else ""
+        if code and parts[3]:
+            try:
+                ff_inflow[code] = float(parts[3])
+            except (ValueError, IndexError):
+                pass
+
+    # 再解析普通行情
+    results = {}
+    for line in raw.strip().split("\n"):
+        line = line.strip()
+        if not line.startswith("v_sh") and not line.startswith("v_sz"):
+            continue
+        m = re.search(r'=(.+?);?$', line)
+        if not m:
+            continue
+        parts = m.group(1).strip('"').split("~")
+        if len(parts) < 40:
             continue
         code = parts[2]
+        # 主力净流入：ff_接口优先，降级到parts[50]
+        main_inflow = ff_inflow.get(code)
+        if main_inflow is None and len(parts) > 50 and parts[50]:
+            try:
+                main_inflow = float(parts[50])
+            except (ValueError, IndexError):
+                pass
         results[code] = {
             "name": parts[1],
             "code": code,
@@ -68,7 +100,7 @@ def fetch_tencent_quote(codes):
             "change_pct": float(parts[32]) if parts[32] else 0,
             "amount": int(float(parts[37]) * 10000) if parts[37] else 0,
             "turnover_rate": float(parts[38]) if parts[38] else 0,
-            "main_inflow": float(parts[49]) if len(parts) > 49 and parts[49] else None,
+            "main_inflow": main_inflow,  # 万元，ff_接口>parts[50]降级
         }
     return results
 
@@ -139,7 +171,7 @@ def main():
     result = {
         "stocks": stocks_data,
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "data_source": "腾讯行情qt.gtimg.cn field[50]=主力净流入(万元,Level-1估算)",
+        "data_source": "腾讯行情qt.gtimg.cn + ff_资金流向接口(主力净流入,万元)",
     }
 
     os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)

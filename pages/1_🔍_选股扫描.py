@@ -274,6 +274,22 @@ def _render_results(results):
             _pct_color = "#ef4444" if _pct > 0 else "#22c55e" if _pct < 0 else "var(--text-secondary)"
             _pct_str = f"{_pct:+.2f}%" if _pct else "-"
             _cur_str = f"¥{_cur:.2f}" if _cur else "-"
+            # PE/市值/涨跌停
+            _pe = _q.get('pe', 0)
+            _circ_cap = _q.get('circ_market_cap', 0)
+            _limit_up = _q.get('limit_up', 0)
+            _extra_parts = []
+            if _pe and _pe > 0:
+                _extra_parts.append(f"PE {_pe:.1f}")
+            if _circ_cap and _circ_cap > 0:
+                _extra_parts.append(f"流通{_circ_cap:.0f}亿")
+            if _limit_up > 0 and _cur > 0:
+                _pct_to_limit = (_limit_up - _cur) / _cur * 100
+                if _pct_to_limit < 2:
+                    _extra_parts.append(f"<span style='color:#ef4444;'>距涨停{_pct_to_limit:.1f}%</span>")
+                elif _cur >= _limit_up:
+                    _extra_parts.append("<span style='color:#ef4444;'>已涨停</span>")
+            _extra_html = " · ".join(_extra_parts) if _extra_parts else ""
 
             st.html(f"""
             <div class="scan-result-card" style="border-left:4px solid {border_color};">
@@ -293,6 +309,7 @@ def _render_results(results):
                         <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
                     </div>
                 </div>
+                {"<div style='margin-top:4px; font-size:0.82em; color:var(--text-muted);'>📊 " + _extra_html + "</div>" if _extra_html else ""}
             </div>
             """)
 
@@ -320,6 +337,22 @@ def _render_results(results):
             _pct_color = "#ef4444" if _pct > 0 else "#22c55e" if _pct < 0 else "var(--text-secondary)"
             _pct_str = f"{_pct:+.2f}%" if _pct else "-"
             _cur_str = f"¥{_cur:.2f}" if _cur else "-"
+            # PE/市值/涨跌停
+            _pe = _q.get('pe', 0)
+            _circ_cap = _q.get('circ_market_cap', 0)
+            _limit_up = _q.get('limit_up', 0)
+            _pb_parts = []
+            if _pe and _pe > 0:
+                _pb_parts.append(f"PE {_pe:.1f}")
+            if _circ_cap and _circ_cap > 0:
+                _pb_parts.append(f"流通{_circ_cap:.0f}亿")
+            if _limit_up > 0 and _cur > 0:
+                _pct_to_limit = (_limit_up - _cur) / _cur * 100
+                if _pct_to_limit < 2:
+                    _pb_parts.append(f"<span style='color:#ef4444;'>距涨停{_pct_to_limit:.1f}%</span>")
+                elif _cur >= _limit_up:
+                    _pb_parts.append("<span style='color:#ef4444;'>已涨停</span>")
+            _pb_extra = " · ".join(_pb_parts) if _pb_parts else ""
 
             st.html(f"""
             <div class="scan-result-card" style="border-left:4px solid #ab47bc;">
@@ -338,6 +371,7 @@ def _render_results(results):
                         <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
                     </div>
                 </div>
+                {"<div style='margin-top:4px; font-size:0.82em; color:var(--text-muted);'>📊 " + _pb_extra + "</div>" if _pb_extra else ""}
             </div>
             """)
 

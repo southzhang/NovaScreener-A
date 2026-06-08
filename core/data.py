@@ -162,10 +162,11 @@ def get_stock_name(code: str) -> str:
 def get_realtime_quote(code: str) -> dict | None:
     """腾讯实时行情"""
     prefix = "sh" if code.startswith("6") else "sz"
-    url = f"http://qt.gtimg.cn/q={prefix}{code}"
+    url = f"https://qt.gtimg.cn/q={prefix}{code}"
 
     try:
         resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp.encoding = 'gbk'
         text = resp.text
         if "=" not in text:
             return None
@@ -178,13 +179,19 @@ def get_realtime_quote(code: str) -> dict | None:
             "name": parts[1],
             "price": float(parts[3]) if parts[3] else 0,
             "pct_change": float(parts[32]) if parts[32] else 0,
-            "volume": float(parts[6]) if parts[6] else 0,
-            "amount": float(parts[37]) if parts[37] else 0,
-            "turnover": float(parts[38]) if parts[38] else 0,
+            "change_amt": float(parts[31]) if parts[31] else 0,      # 涨跌额
+            "volume": float(parts[36]) if parts[36] else 0,          # 成交量(手)
+            "amount": float(parts[37]) if parts[37] else 0,          # 成交额(万元)
+            "turnover": float(parts[38]) if parts[38] else 0,        # 换手率%
             "high": float(parts[33]) if parts[33] else 0,
             "low": float(parts[34]) if parts[34] else 0,
             "open": float(parts[5]) if parts[5] else 0,
             "pre_close": float(parts[4]) if parts[4] else 0,
+            "pe": float(parts[39]) if len(parts) > 39 and parts[39] else 0,           # 市盈率
+            "circ_market_cap": float(parts[44]) if len(parts) > 44 and parts[44] else 0,  # 流通市值(亿)
+            "total_market_cap": float(parts[45]) if len(parts) > 45 and parts[45] else 0, # 总市值(亿)
+            "limit_up": float(parts[47]) if len(parts) > 47 and parts[47] else 0,     # 涨停价
+            "limit_down": float(parts[48]) if len(parts) > 48 and parts[48] else 0,   # 跌停价
         }
     except Exception as e:
         print(f"[数据] 腾讯行情 {code} 失败: {e}")
@@ -236,23 +243,22 @@ def _parse_tencent_realtime_batch(raw: str) -> list[dict]:
             # 过滤ST/退市
             if 'ST' in name or '退' in name:
                 continue
-            # parts[35] = "现价/成交量(手)/成交额(元)" 组合字段（实测索引35，非文档的36）
-            amount_raw = 0
-            if parts[35] and '/' in parts[35]:
-                try:
-                    amount_raw = float(parts[35].split('/')[2])
-                except (IndexError, ValueError):
-                    amount_raw = 0
+            # parts[37] = 成交额(万元) | parts[36] = 成交量(手)
             stocks.append({
                 "code": code,
                 "name": name,
                 "price": price,
                 "pct_change": float(parts[32]) if parts[32] else 0,
                 "turnover": float(parts[38]) if parts[38] else 0,
-                "volume": float(parts[6]) if parts[6] else 0,
-                "amount": amount_raw,
-                "outer_vol": float(parts[7]) if parts[7] else 0,
-                "inner_vol": float(parts[8]) if parts[8] else 0,
+                "volume": float(parts[36]) if parts[36] else 0,           # 成交量(手)
+                "amount": float(parts[37]) if parts[37] else 0,           # 成交额(万元)
+                "outer_vol": float(parts[7]) if parts[7] else 0,          # 外盘(手)
+                "inner_vol": float(parts[8]) if parts[8] else 0,          # 内盘(手)
+                "pe": float(parts[39]) if len(parts) > 39 and parts[39] else 0,           # 市盈率
+                "circ_market_cap": float(parts[44]) if len(parts) > 44 and parts[44] else 0,  # 流通市值(亿)
+                "total_market_cap": float(parts[45]) if len(parts) > 45 and parts[45] else 0, # 总市值(亿)
+                "limit_up": float(parts[47]) if len(parts) > 47 and parts[47] else 0,     # 涨停价
+                "limit_down": float(parts[48]) if len(parts) > 48 and parts[48] else 0,   # 跌停价
             })
         except Exception:
             continue
@@ -292,6 +298,7 @@ def get_stock_list() -> pd.DataFrame:
         url = f"https://qt.gtimg.cn/q={qs}"
         try:
             resp = requests.get(url, timeout=10, headers=HEADERS)
+            resp.encoding = 'gbk'
             return _parse_tencent_realtime_batch(resp.text)
         except Exception:
             return []
@@ -347,6 +354,7 @@ def get_market_indices() -> list[dict]:
     url = f"https://qt.gtimg.cn/q={secids}"
     try:
         resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp.encoding = 'gbk'
         text = resp.text
         results = []
         for line in text.strip().split(";"):
@@ -508,6 +516,7 @@ def get_capital_flow(code: str) -> dict | None:
     url = f"https://qt.gtimg.cn/q={prefix}{code}"
     try:
         resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp.encoding = 'gbk'
         text = resp.text
         if "=" in text:
             parts = text.split("=")[1].strip('";\n').split("~")
@@ -594,3 +603,104 @@ def get_top_volume(limit: int = 20) -> pd.DataFrame:
     if df.empty:
         return df
     return df.nlargest(limit, "amount") if "amount" in df.columns else df.head(limit)
+
+
+# ===== 盘口数据（买卖五档） =====
+
+def get_order_book(code: str) -> dict | None:
+    """获取买卖五档盘口数据（腾讯完整行情接口的[9]-[28]字段）
+    返回: {bid1-bid5: (价格, 量), ask1-ask5: (价格, 量), ...}
+    也可获取s_pk接口的委比数据: {commission_ratio, commission_diff, inner_ratio, outer_ratio}
+    """
+    prefix = "sh" if code.startswith("6") else "sz"
+
+    # 买卖五档从完整行情接口获取（字段9-28）
+    url = f"https://qt.gtimg.cn/q={prefix}{code}"
+    try:
+        resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp.encoding = 'gbk'
+        text = resp.text
+        if "=" not in text:
+            return None
+        parts = text.split("=")[1].strip('";\n').split("~")
+        if len(parts) < 29:
+            return None
+
+        result = {
+            "code": code,
+            "name": parts[1] if len(parts) > 1 else "",
+            "price": float(parts[3]) if parts[3] else 0,
+        }
+        # 买盘 [9]买一量 [10]买一价 [11]买二量 [12]买二价 ... [17]买五量 [18]买五价
+        for i in range(5):
+            qty_idx = 9 + i * 2
+            price_idx = 10 + i * 2
+            if len(parts) > price_idx:
+                result[f"bid{i+1}"] = (
+                    float(parts[price_idx]) if parts[price_idx] else 0,
+                    int(float(parts[qty_idx])) if parts[qty_idx] else 0,
+                )
+        # 卖盘 [19]卖一量 [20]卖一价 [21]卖二量 [22]卖二价 ... [27]卖五量 [28]卖五价
+        for i in range(5):
+            qty_idx = 19 + i * 2
+            price_idx = 20 + i * 2
+            if len(parts) > price_idx:
+                result[f"ask{i+1}"] = (
+                    float(parts[price_idx]) if parts[price_idx] else 0,
+                    int(float(parts[qty_idx])) if parts[qty_idx] else 0,
+                )
+
+        # 委比数据（s_pk接口: 委比~委差~内盘比~外盘比）
+        try:
+            pk_url = f"https://qt.gtimg.cn/q=s_pk{prefix}{code}"
+            pk_resp = requests.get(pk_url, timeout=3, headers=HEADERS)
+            pk_resp.encoding = 'gbk'
+            pk_text = pk_resp.text
+            if "=" in pk_text:
+                pk_parts = pk_text.split("=")[1].strip('";\n').split("~")
+                if len(pk_parts) >= 4:
+                    result["commission_ratio"] = float(pk_parts[0]) if pk_parts[0] else 0
+                    result["commission_diff"] = float(pk_parts[1]) if pk_parts[1] else 0
+                    result["inner_ratio"] = float(pk_parts[2]) if pk_parts[2] else 0
+                    result["outer_ratio"] = float(pk_parts[3]) if pk_parts[3] else 0
+        except Exception:
+            pass  # 委比数据非关键，失败不影响
+
+        _set_cache(f"orderbook_{code}", result)
+        return result
+    except Exception as e:
+        print(f"[数据] 盘口数据 {code} 失败: {e}")
+        return None
+
+
+# ===== 简要行情（轻量轮询） =====
+
+def get_quote_brief(code: str) -> dict | None:
+    """获取简要行情（腾讯s_接口，数据量小，适合高频轮询）
+    返回: {code, name, price, change_pct} 等核心字段
+    """
+    prefix = "sh" if code.startswith("6") else "sz"
+    url = f"https://qt.gtimg.cn/q=s_{prefix}{code}"
+    try:
+        resp = requests.get(url, timeout=5, headers=HEADERS)
+        resp.encoding = 'gbk'
+        text = resp.text
+        if "=" not in text:
+            return None
+        # s_接口返回格式: v_s_sz000001="1~平安银行~000001~11.07~0.82~..."
+        # [1]名称 [2]代码 [3]现价 [4]涨跌额 [5]涨跌幅% [6]成交量(手) [7]成交额(万)
+        parts = text.split("=")[1].strip('";\n').split("~")
+        if len(parts) < 8:
+            return None
+        return {
+            "code": parts[2] if len(parts) > 2 else code,
+            "name": parts[1] if len(parts) > 1 else "",
+            "price": float(parts[3]) if parts[3] else 0,
+            "change_amt": float(parts[4]) if parts[4] else 0,
+            "change_pct": float(parts[5]) if parts[5] else 0,
+            "volume": int(float(parts[6])) if parts[6] else 0,     # 手
+            "amount": float(parts[7]) if parts[7] else 0,          # 万元
+        }
+    except Exception as e:
+        print(f"[数据] 简要行情 {code} 失败: {e}")
+        return None

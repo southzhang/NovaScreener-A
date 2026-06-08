@@ -66,18 +66,33 @@ if watchlist:
         codes = df["code"].tolist()
         realtime = all_stocks[all_stocks["code"].isin(codes)]
         if not realtime.empty:
+            merge_cols = ["code", "price", "pct_change", "volume", "amount"]
+            for extra in ["pe", "circ_market_cap", "limit_up", "limit_down"]:
+                if extra in realtime.columns:
+                    merge_cols.append(extra)
             display = df.merge(
-                realtime[["code", "price", "pct_change", "volume", "amount"]],
+                realtime[merge_cols],
                 on="code", how="left"
             )
             if "amount" in display.columns:
                 display["amount"] = display["amount"] / 1e8
-            display = display.rename(columns={
+            rename_map = {
                 "code": "代码", "name": "名称", "group": "分组",
                 "price": "价格", "pct_change": "涨跌幅",
-                "volume": "成交量", "amount": "成交额(亿)"
-            })
+                "volume": "成交量", "amount": "成交额(亿)",
+                "pe": "PE", "circ_market_cap": "流通市值(亿)",
+                "limit_up": "涨停价", "limit_down": "跌停价",
+            }
+            display = display.rename(columns=rename_map)
             fmt = {"价格": "¥{:.2f}", "涨跌幅": "{:+.2f}%", "成交额(亿)": "{:.2f}"}
+            if "PE" in display.columns:
+                fmt["PE"] = "{:.1f}"
+            if "流通市值(亿)" in display.columns:
+                fmt["流通市值(亿)"] = "{:.1f}"
+            if "涨停价" in display.columns:
+                fmt["涨停价"] = "¥{:.2f}"
+            if "跌停价" in display.columns:
+                fmt["跌停价"] = "¥{:.2f}"
             st.dataframe(
                 display.style.format(fmt),
                 width='stretch', hide_index=True,

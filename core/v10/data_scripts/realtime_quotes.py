@@ -51,16 +51,21 @@ def fetch_quotes(codes):
         results.append({
             'name': parts[1],
             'code': parts[2],
-            'current': float(parts[3]),       # ⭐ 现价
-            'yesterday': float(parts[4]),      # 昨收
-            'open': float(parts[5]),
-            'high': float(parts[33]),
-            'low': float(parts[34]),
+            'current': float(parts[3]) if parts[3] else 0,       # ⭐ 现价
+            'yesterday': float(parts[4]) if parts[4] else 0,      # 昨收
+            'open': float(parts[5]) if parts[5] else 0,
+            'change_amt': float(parts[31]) if parts[31] else 0,   # 涨跌额
             'change_pct': float(parts[32]) if parts[32] else 0,
-            'change_amt': float(parts[31]) if parts[31] else 0,
-            'volume': parts[36],
-            'amount': parts[37],
-            'turnover': parts[38],
+            'high': float(parts[33]) if parts[33] else 0,
+            'low': float(parts[34]) if parts[34] else 0,
+            'volume': float(parts[36]) if parts[36] else 0,       # 成交量(手)
+            'amount': float(parts[37]) if parts[37] else 0,       # 成交额(万元)
+            'turnover': float(parts[38]) if parts[38] else 0,     # 换手率%
+            'pe': float(parts[39]) if len(parts) > 39 and parts[39] else 0,            # 市盈率
+            'circ_market_cap': float(parts[44]) if len(parts) > 44 and parts[44] else 0,  # 流通市值(亿)
+            'total_market_cap': float(parts[45]) if len(parts) > 45 and parts[45] else 0, # 总市值(亿)
+            'limit_up': float(parts[47]) if len(parts) > 47 and parts[47] else 0,      # 涨停价
+            'limit_down': float(parts[48]) if len(parts) > 48 and parts[48] else 0,    # 跌停价
         })
     return results
 

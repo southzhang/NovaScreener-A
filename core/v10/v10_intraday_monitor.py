@@ -134,7 +134,7 @@ def fetch_realtime_quotes(codes):
                         'high': float(parts[33]) if parts[33] else 0,
                         'low': float(parts[34]) if parts[34] else 0,
                         'change_pct': float(parts[32]) if parts[32] else 0,
-                        'volume': float(parts[6]) if parts[6] else 0,
+                        'volume': float(parts[36]) if parts[36] else 0,        # 成交量(手)
                         'amount': float(parts[37]) if parts[37] else 0,  # 腾讯API单位：万元
                         'turnover': float(parts[38]) if parts[38] else 0,
                     }

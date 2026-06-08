@@ -128,7 +128,7 @@ def get_sector_data_from_tencent():
     
     try:
         codes = ','.join(sector_etfs.keys())
-        url = f"http://qt.gtimg.cn/q={codes}"
+        url = f"https://qt.gtimg.cn/q={codes}"
         text = fetch_url(url, timeout=10)
         if not text:
             return []
@@ -187,7 +187,7 @@ def get_stock_sector(code):
     try:
         # 从腾讯行情获取板块信息
         prefix = "sh" if code.startswith("6") else "sz"
-        url = f"http://qt.gtimg.cn/q={prefix}{code}"
+        url = f"https://qt.gtimg.cn/q={prefix}{code}"
         text = fetch_url(url, timeout=5)
         if not text:
             return None

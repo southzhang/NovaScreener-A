@@ -3,7 +3,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 from core.db import add_position, get_positions, sell_position, delete_position, update_position, add_to_position, get_position_by_code
-from core.data import get_realtime_quote, get_stock_history, get_realtime_quotes_batch
+from core.data import get_realtime_quote, get_stock_history, get_realtime_quotes_batch, get_order_book
 from core.recommend import calc_trailing_stop
 from core.alerts import send_feishu_card
 from core.ui import inject_global_css, render_theme_toggle, render_page_header
@@ -184,11 +184,22 @@ else:
             trailing_info = None
             advisor = None
 
-        # 风险等级
-        if trailing_info:
-            risk_level = trailing_info.risk_level
+        # 风险等级（含涨跌停检测）
+        limit_up = q.get("limit_up", 0)
+        limit_down = q.get("limit_down", 0)
+        pe = q.get("pe", 0)
+        circ_cap = q.get("circ_market_cap", 0)
+
+        if limit_down > 0 and current_price <= limit_down:
+            risk_level = "⛔ 跌停"
+        elif limit_up > 0 and current_price >= limit_up:
+            risk_level = "🔴 涨停"
+        elif trailing_info and "触发" in trailing_info.risk_level:
+            risk_level = "⛔ 触发"
         elif stop_loss > 0 and current_price <= stop_loss:
             risk_level = "⛔ 触发"
+        elif limit_up > 0 and (limit_up - current_price) / current_price * 100 < 1:
+            risk_level = "🟠 逼近涨停"
         elif stop_loss > 0 and (current_price - stop_loss) / current_price * 100 < 3:
             risk_level = "🔴 预警"
         else:
@@ -215,8 +226,30 @@ else:
 
         atr_html = f"<span style='color:var(--text-secondary);'>¥{trailing_info.atr_stop}</span>" if trailing_info else ""
 
-        risk_bg = "#ff4b4b10" if "触发" in risk_level else "#ffab4010" if "预警" in risk_level else "var(--bg-card)"
-        risk_border = "#ff4b4b40" if "触发" in risk_level else "#ffab4040" if "预警" in risk_level else "var(--border-color)"
+        risk_bg = "#ff4b4b10" if "触发" in risk_level or "跌停" in risk_level else "#ffab4010" if "预警" in risk_level or "涨停" in risk_level or "逼近" in risk_level else "var(--bg-card)"
+        risk_border = "#ff4b4b40" if "触发" in risk_level or "跌停" in risk_level else "#ffab4040" if "预警" in risk_level or "涨停" in risk_level or "逼近" in risk_level else "var(--border-color)"
+
+        # 涨跌停距离
+        limit_html = ""
+        if limit_up > 0 or limit_down > 0:
+            limit_parts = []
+            if limit_up > 0:
+                pct_to_up = (limit_up - current_price) / current_price * 100 if current_price > 0 else 0
+                limit_parts.append(f"<span style='color:#ff4b4b;'>涨停¥{limit_up:.2f}({pct_to_up:+.1f}%)</span>")
+            if limit_down > 0:
+                pct_to_down = (current_price - limit_down) / current_price * 100 if current_price > 0 else 0
+                limit_parts.append(f"<span style='color:#00c853;'>跌停¥{limit_down:.2f}({pct_to_down:+.1f}%)</span>")
+            limit_html = " · ".join(limit_parts)
+
+        # PE/市值
+        pe_cap_html = ""
+        pe_cap_parts = []
+        if pe > 0:
+            pe_cap_parts.append(f"PE {pe:.1f}")
+        if circ_cap > 0:
+            pe_cap_parts.append(f"流通{circ_cap:.0f}亿")
+        if pe_cap_parts:
+            pe_cap_html = " · ".join(pe_cap_parts)
 
         st.html(f"""
         <div class="position-card" style="border-color:{risk_border}; background: linear-gradient(135deg, var(--bg-card) 0%, {risk_bg} 100%);">
@@ -268,6 +301,8 @@ else:
                 </div>
                 {"<div class='position-metric'><div class='position-metric-label'>ATR止盈</div><div class='position-metric-value'>" + atr_html + "</div></div>" if atr_html else ""}
             </div>
+            {"<div style='margin-top:8px; font-size:0.85em; color:var(--text-secondary);'>📈 " + limit_html + "</div>" if limit_html else ""}
+            {"<div style='margin-top:4px; font-size:0.82em; color:var(--text-muted);'>📊 " + pe_cap_html + "</div>" if pe_cap_html else ""}
         </div>
         """)
 
@@ -326,12 +361,12 @@ else:
         btn_cols = st.columns([1, 1, 1, 1, 2])
         with btn_cols[0]:
             if st.button("📤 卖出", key=f"sell_{p['id']}"):
-                sell_position(p["id"], current_price)
-                st.success(f"已卖出 {p['name']} @ ¥{current_price}")
-                st.rerun()
+                st.session_state[f"show_sell_form_{p['id']}"] = True
+                st.session_state[f"show_add_form_{p['id']}"] = False
         with btn_cols[1]:
             if st.button("📈 加仓", key=f"add_{p['id']}"):
                 st.session_state[f"show_add_form_{p['id']}"] = True
+                st.session_state[f"show_sell_form_{p['id']}"] = False
         with btn_cols[2]:
             if st.button("🗑️ 删除", key=f"del_{p['id']}"):
                 delete_position(p["id"])
@@ -347,6 +382,71 @@ else:
                         st.warning("发送失败，请检查Webhook配置")
                 else:
                     st.warning("请先设置止损价")
+
+        # ===== 卖出表单（点击卖出按钮后展开）=====
+        if st.session_state.get(f"show_sell_form_{p['id']}", False):
+            with st.form(f"sell_form_{p['id']}"):
+                st.html(f'<div style="font-weight:700; margin-bottom:8px;">📤 卖出 {p["name"]}({code})</div>')
+                sc1, sc2, sc3 = st.columns([2, 2, 2])
+                with sc1:
+                    sell_price_input = st.number_input(
+                        "卖出价格", min_value=0.01, step=0.01,
+                        format="%.2f", value=round(current_price, 2),
+                        key=f"sp_{p['id']}"
+                    )
+                with sc2:
+                    max_qty = p["quantity"]
+                    sell_qty_input = st.number_input(
+                        f"卖出数量（股）", min_value=0, max_value=max_qty,
+                        step=100, value=max_qty,
+                        key=f"sq_{p['id']}"
+                    )
+                    if sell_qty_input == 0:
+                        st.caption(f"💡 输入0 = 全部卖出（{max_qty}股）")
+                with sc3:
+                    sell_date_input = st.date_input(
+                        "卖出日期", value=datetime.now().date(),
+                        key=f"sd_{p['id']}"
+                    )
+
+                # 预计盈亏计算
+                actual_sell_qty = sell_qty_input if sell_qty_input > 0 else max_qty
+                est_pnl = (sell_price_input - p["buy_price"]) * actual_sell_qty
+                est_pnl_pct = (sell_price_input - p["buy_price"]) / p["buy_price"] * 100 if p["buy_price"] > 0 else 0
+                pnl_color = "#ff4b4b" if est_pnl >= 0 else "#00c853"
+                remaining_qty = max_qty - actual_sell_qty
+
+                st.html(f"""
+                <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px; margin:4px 0;">
+                    <div style="display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                        <span style="color:var(--text-secondary);">买入价 ¥{p['buy_price']:.2f} × {actual_sell_qty}股</span>
+                        <span style="color:var(--text-secondary);">卖出价 ¥{sell_price_input:.2f}</span>
+                        <span style="font-weight:700; color:{pnl_color};">预计盈亏 ¥{est_pnl:+,.0f}（{est_pnl_pct:+.2f}%）</span>
+                    </div>
+                    {f'<div style="color:var(--text-muted); font-size:0.85em; margin-top:4px;">剩余持仓 {remaining_qty}股</div>' if remaining_qty > 0 else '<div style="color:#ff9800; font-size:0.85em; margin-top:4px;">全部清仓</div>'}
+                </div>
+                """)
+
+                bc1, bc2, bc3 = st.columns([1, 1, 3])
+                with bc1:
+                    confirm_sell = st.form_submit_button("✅ 确认卖出", type="primary")
+                with bc2:
+                    cancel_sell = st.form_submit_button("❌ 取消")
+
+                if confirm_sell:
+                    sell_qty = sell_qty_input if sell_qty_input > 0 else max_qty
+                    sell_date_str = sell_date_input.strftime("%Y-%m-%d") if hasattr(sell_date_input, 'strftime') else str(sell_date_input)
+                    sell_position(p["id"], sell_price_input, sell_quantity=sell_qty, sell_date=sell_date_str)
+                    if sell_qty >= max_qty:
+                        st.success(f"✅ 已全部卖出 {p['name']} {sell_qty}股 @ ¥{sell_price_input:.2f}，盈亏 ¥{est_pnl:+,.0f}")
+                    else:
+                        st.success(f"✅ 已部分卖出 {p['name']} {sell_qty}股 @ ¥{sell_price_input:.2f}，剩余 {remaining_qty}股，本次盈亏 ¥{est_pnl:+,.0f}")
+                    st.session_state[f"show_sell_form_{p['id']}"] = False
+                    st.rerun()
+
+                if cancel_sell:
+                    st.session_state[f"show_sell_form_{p['id']}"] = False
+                    st.rerun()
 
         # 加仓表单（点击加仓按钮后展开）
         if st.session_state.get(f"show_add_form_{p['id']}", False):
@@ -390,14 +490,20 @@ with st.expander("📋 已卖出记录"):
     else:
         sold_data = []
         for p in sold:
-            pnl = (p.get("sell_price", 0) - p["buy_price"]) * p["quantity"]
-            pnl_pct = (p.get("sell_price", 0) - p["buy_price"]) / p["buy_price"] * 100 if p["buy_price"] > 0 else 0
+            sell_qty = p.get("sell_quantity", 0) or p.get("quantity", 0)
+            buy_qty = p.get("quantity", 0)
+            # 优先用sell_quantity算盈亏，兼容旧数据
+            calc_qty = sell_qty if sell_qty > 0 else buy_qty
+            sell_price = p.get("sell_price", 0)
+            buy_price = p.get("buy_price", 0)
+            pnl = (sell_price - buy_price) * calc_qty
+            pnl_pct = (sell_price - buy_price) / buy_price * 100 if buy_price > 0 else 0
             sold_data.append({
                 "代码": p["code"],
                 "名称": p["name"],
-                "买入价": f"¥{p['buy_price']:.2f}",
-                "卖出价": f"¥{p.get('sell_price', 0):.2f}",
-                "数量": p["quantity"],
+                "买入价": f"¥{buy_price:.2f}",
+                "卖出价": f"¥{sell_price:.2f}",
+                "数量": f"{calc_qty}股",
                 "盈亏": f"¥{pnl:+,.0f}",
                 "收益率": f"{pnl_pct:+.2f}%",
                 "买入日": p.get("buy_date", ""),

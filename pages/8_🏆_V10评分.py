@@ -71,9 +71,30 @@ elif input_mode == "从V10观察池导入":
     else:
         st.warning("V10观察池文件不存在，请先运行V10扫描")
 
+
+def _build_extra_info(price: float, extras: dict) -> str:
+    """构建PE/市值/涨跌停信息行"""
+    parts = []
+    pe = extras.get("pe", 0)
+    circ_cap = extras.get("circ_cap", 0)
+    limit_up = extras.get("limit_up", 0)
+    if pe and pe > 0:
+        parts.append(f"PE {pe:.1f}")
+    if circ_cap and circ_cap > 0:
+        parts.append(f"流通{circ_cap:.0f}亿")
+    if limit_up > 0 and price > 0:
+        pct_to_limit = (limit_up - price) / price * 100
+        if pct_to_limit < 2:
+            parts.append(f"<span style='color:#ef4444;'>距涨停{pct_to_limit:.1f}%</span>")
+        elif price >= limit_up:
+            parts.append("<span style='color:#ef4444;'>已涨停</span>")
+    return " · ".join(parts)
+
+
 # 运行评分
 if st.button("🚀 开始评分", type="primary", width='stretch') and codes:
     results = []
+    _quote_extras = {}
     progress = st.progress(0)
     status = st.empty()
 
@@ -97,10 +118,14 @@ if st.button("🚀 开始评分", type="primary", width='stretch') and codes:
             price = quote["price"] if quote else close[-1]
             pct_change = quote["pct_change"] if quote else 0
             name = quote["name"] if quote else code
+            pe = quote.get("pe", 0) if quote else 0
+            circ_cap = quote.get("circ_market_cap", 0) if quote else 0
+            limit_up = quote.get("limit_up", 0) if quote else 0
 
             result = score_stock(code, name, close, high, low, volume, open_p, price, pct_change)
             if result:
                 results.append(result)
+                _quote_extras[code] = {"pe": pe, "circ_cap": circ_cap, "limit_up": limit_up}
 
         except Exception as e:
             st.error(f"{code} 评分失败: {e}")
@@ -120,6 +145,8 @@ if st.button("🚀 开始评分", type="primary", width='stretch') and codes:
         if strong:
             st.html('<h3>🔴 强烈推荐 (≥80分)</h3>')
             for r in strong:
+                _ex = _quote_extras.get(r.code, {})
+                _info = _build_extra_info(r.price, _ex)
                 st.html(f"""
                 <div class="scan-result-card" style="border-left:4px solid var(--up-color);">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
@@ -135,6 +162,7 @@ if st.button("🚀 开始评分", type="primary", width='stretch') and codes:
                             <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r.tags[:3])}</span>
                         </div>
                     </div>
+                    {"<div style='margin-top:4px; font-size:0.82em; color:var(--text-muted);'>📊 " + _info + "</div>" if _info else ""}
                 </div>
                 """)
 
@@ -143,6 +171,8 @@ if st.button("🚀 开始评分", type="primary", width='stretch') and codes:
         if watch:
             st.html('<h3>🟠 值得关注 (60-79分)</h3>')
             for r in watch:
+                _ex = _quote_extras.get(r.code, {})
+                _info = _build_extra_info(r.price, _ex)
                 st.html(f"""
                 <div class="scan-result-card" style="border-left:4px solid #ffab40;">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
@@ -158,6 +188,7 @@ if st.button("🚀 开始评分", type="primary", width='stretch') and codes:
                             <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r.tags[:3])}</span>
                         </div>
                     </div>
+                    {"<div style='margin-top:4px; font-size:0.82em; color:var(--text-muted);'>📊 " + _info + "</div>" if _info else ""}
                 </div>
                 """)
 

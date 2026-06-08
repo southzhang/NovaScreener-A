@@ -124,7 +124,7 @@ if st.button("🔍 扫描回调机会", type="primary", width='stretch') and cod
                 tags.append("MACD多头")
 
             try:
-                rt_url = f"http://qt.gtimg.cn/q={prefix}{code}"
+                rt_url = f"https://qt.gtimg.cn/q={prefix}{code}"
                 rt_resp = requests.get(rt_url, timeout=5)
                 parts = rt_resp.text.split("=")[1].strip('";\n').split("~")
                 price = float(parts[3])

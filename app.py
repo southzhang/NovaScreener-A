@@ -320,6 +320,8 @@ if watchlist:
                 "涨跌幅": quote['pct_change'],
                 "成交额": f"{quote['amount']/10000:.0f}万",
                 "换手率": f"{quote['turnover']:.2f}%",
+                "PE": f"{quote['pe']:.1f}" if quote.get('pe') and quote['pe'] > 0 else "-",
+                "流通市值": f"{quote['circ_market_cap']:.0f}亿" if quote.get('circ_market_cap') and quote['circ_market_cap'] > 0 else "-",
             })
     
     if wl_data:
@@ -406,6 +408,7 @@ if positions:
                 "买入价": f"¥{p['buy_price']:.2f}",
                 "现价": f"¥{current_price['price']:.2f}",
                 "数量": p["quantity"],
+                "市值": f"¥{current_price['price'] * p['quantity']:,.0f}",
                 "盈亏": f"¥{profit_amount:+.2f}",
                 "盈亏%": f"{profit_pct:+.2f}%",
                 "止损": f"¥{p.get('stop_loss', 0):.2f}" if p.get('stop_loss') else "-",
@@ -419,6 +422,7 @@ if positions:
                 "买入价": f"¥{p['buy_price']:.2f}",
                 "现价": "获取失败",
                 "数量": p["quantity"],
+                "市值": "-",
                 "盈亏": "-",
                 "盈亏%": "-",
                 "止损": f"¥{p.get('stop_loss', 0):.2f}" if p.get('stop_loss') else "-",

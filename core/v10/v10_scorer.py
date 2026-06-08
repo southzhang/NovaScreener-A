@@ -36,7 +36,7 @@ def fetch_url(url, timeout=8):
 def get_realtime(code):
     """返回 {price, change_pct, amount_wan, circ_yi} 或 None"""
     prefix = "sh" if code.startswith("6") else "sz"
-    url = f"http://qt.gtimg.cn/q={prefix}{code}"
+    url = f"https://qt.gtimg.cn/q={prefix}{code}"
     text = fetch_url(url)
     if not text or "=" not in text:
         return None
@@ -59,7 +59,7 @@ def get_amplitude_percentile(code):
     """计算当前振幅在近30日的分位数(0-100)"""
     prefix = "sh" if code.startswith("6") else "sz"
     symbol = f"{prefix}{code}"
-    url = f"http://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,30,qfq"
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,30,qfq"
     text = fetch_url(url)
     if not text:
         return None

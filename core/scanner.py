@@ -244,8 +244,18 @@ def get_market_overview(df: pd.DataFrame | None = None) -> dict:
 
     up_count = len(df[df["pct_change"] > 0])
     down_count = len(df[df["pct_change"] < 0])
-    limit_up = len(df[df["pct_change"] >= 9.9])
-    limit_down = len(df[df["pct_change"] <= -9.9])
+
+    # 优先用精确涨跌停价判断，降级到涨跌幅近似
+    if "limit_up" in df.columns and "limit_down" in df.columns and "price" in df.columns:
+        _valid_up = df["limit_up"] > 0
+        _valid_down = df["limit_down"] > 0
+        _hit_up = (df["price"] >= df["limit_up"]) & _valid_up
+        _hit_down = (df["price"] <= df["limit_down"]) & _valid_down
+        limit_up = int(_hit_up.sum()) if _valid_up.any() else len(df[df["pct_change"] >= 9.9])
+        limit_down = int(_hit_down.sum()) if _valid_down.any() else len(df[df["pct_change"] <= -9.9])
+    else:
+        limit_up = len(df[df["pct_change"] >= 9.9])
+        limit_down = len(df[df["pct_change"] <= -9.9])
 
     return {
         "total": len(df),

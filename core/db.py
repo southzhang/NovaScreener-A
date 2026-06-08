@@ -88,6 +88,11 @@ def init_db():
             conn.execute("ALTER TABLE signals ADD COLUMN grade TEXT DEFAULT ''")
         except:
             pass  # 字段已存在
+        # 迁移：给portfolio表添加sell_quantity字段（如果不存在）
+        try:
+            conn.execute("ALTER TABLE portfolio ADD COLUMN sell_quantity INTEGER DEFAULT 0")
+        except:
+            pass  # 字段已存在
 
 
 # ===== 自选股操作 =====
@@ -216,13 +221,45 @@ def update_position(position_id: int, **kwargs):
         conn.execute(f"UPDATE portfolio SET {set_clause} WHERE id = ?", values)
 
 
-def sell_position(position_id: int, sell_price: float):
-    """卖出持仓"""
+def sell_position(position_id: int, sell_price: float, sell_quantity: int = 0, sell_date: str = ""):
+    """卖出持仓。sell_quantity=0表示全部卖出。支持部分卖出，剩余数量继续持有。"""
     with get_db() as conn:
-        conn.execute(
-            "UPDATE portfolio SET status = 'sold', sell_price = ?, sell_date = date('now', 'localtime') WHERE id = ?",
-            (sell_price, position_id)
-        )
+        pos = conn.execute(
+            "SELECT quantity, buy_price FROM portfolio WHERE id = ? AND status = 'holding'",
+            (position_id,)
+        ).fetchone()
+        if not pos:
+            return
+
+        total_qty = pos["quantity"]
+        buy_price = pos["buy_price"]
+        actual_sell_qty = sell_quantity if sell_quantity > 0 else total_qty
+        actual_sell_date = sell_date if sell_date else datetime.now().strftime("%Y-%m-%d")
+
+        if actual_sell_qty >= total_qty:
+            # 全部卖出
+            conn.execute(
+                "UPDATE portfolio SET status = 'sold', sell_price = ?, sell_quantity = ?, sell_date = ? WHERE id = ?",
+                (sell_price, total_qty, actual_sell_date, position_id)
+            )
+        else:
+            # 部分卖出：原记录减数量，新增一条sold记录
+            remaining = total_qty - actual_sell_qty
+            conn.execute(
+                "UPDATE portfolio SET quantity = ? WHERE id = ?",
+                (remaining, position_id)
+            )
+            # 插入sold记录
+            row = conn.execute("SELECT code, name, stop_loss, target_price, notes FROM portfolio WHERE id = ?",
+                               (position_id,)).fetchone()
+            if row:
+                conn.execute(
+                    """INSERT INTO portfolio (code, name, buy_price, quantity, stop_loss, target_price, notes, status, sell_price, sell_quantity, sell_date)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'sold', ?, ?, ?)""",
+                    (row["code"], row["name"], buy_price, actual_sell_qty,
+                     row["stop_loss"], row["target_price"], row["notes"],
+                     sell_price, actual_sell_qty, actual_sell_date)
+                )
 
 
 def delete_position(position_id: int):

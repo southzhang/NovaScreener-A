@@ -69,10 +69,11 @@ def _gen_stock_pool() -> list:
 
 def _fetch_tencent_batch(codes: list) -> dict:
     results = {}
-    url = f"http://qt.gtimg.cn/q={','.join(codes)}"
+    url = f"https://qt.gtimg.cn/q={','.join(codes)}"
     try:
-        resp = urllib.request.urlopen(url, timeout=20)
-        data = resp.read().decode('GBK', errors='ignore')
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        resp = urllib.request.urlopen(req, timeout=20)
+        data = resp.read().decode('gbk', errors='ignore')
         for line in data.strip().split('\n'):
             line = line.strip().rstrip(';')
             if not line:
@@ -94,12 +95,12 @@ def _fetch_tencent_batch(codes: list) -> dict:
                     continue
                 prev_close = float(parts[4]) if parts[4] else 0
                 open_p = float(parts[5]) if parts[5] else 0
-                volume = float(parts[6]) if parts[6] else 0
+                volume = float(parts[36]) if parts[36] else 0     # 成交量(手)
                 high = float(parts[33]) if parts[33] else 0
                 low = float(parts[34]) if parts[34] else 0
-                amount = float(parts[37]) if len(parts) > 37 and parts[37] else 0
+                amount = float(parts[37]) if len(parts) > 37 and parts[37] else 0  # 成交额(万元)
                 turnover = float(parts[38]) if len(parts) > 38 and parts[38] else 0
-                circ_cap = float(parts[45]) if len(parts) > 45 and parts[45] else 0
+                circ_cap = float(parts[44]) if len(parts) > 44 and parts[44] else 0
                 change_pct = round((price - prev_close) / prev_close * 100, 2) if prev_close > 0 else 0
                 vol_ratio = round(amount / max(circ_cap * 12.5 / 10000, 1), 1) if circ_cap > 0 else 0
                 results[code] = {

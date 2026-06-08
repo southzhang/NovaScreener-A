@@ -1,106 +1,141 @@
 #!/usr/bin/env python3
 """
-V10 基本面过滤模块
-对股票列表做基本面排雷，规则：
-  1. 扣非ROE < 5% → 排除
-  2. 净利润同比增速 < 0% → 排除
-  3. 股票名称含"ST" → 排除
-  4. 股票名称含"*ST" → 排除
+V10 基本面过滤模块（腾讯行情PE + 东财datacenter降级版）
 
-使用 iFinD HTTP API 的 basic_data 方法批量查询指标。
+排雷规则：
+  1. PE ≤ 0 → 排除（亏损股）
+  2. PE > 200 → 排除（微利/异常）
+  3. 名称含"ST"/"*ST"/"退" → 排除
+  4. 名称以"N"开头 → 排除（次新股首日）
+
+降级链：腾讯行情PE → iFinD ROE/净利润同比 → 跳过（容错）
+
 返回 (passed_stocks, rejected_stocks) 元组。
 """
 
-import re
 import sys
 import os
+import time
+import json
+import urllib.request
+import urllib.error
 
-# 确保能导入同目录的 ifind_http_api
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# iFinD 降级
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from ifind_http_api import iFinD
+    HAS_IFIND = True
+except ImportError:
+    HAS_IFIND = False
 
-from ifind_http_api import iFinD
+# 阈值
+PE_MAX = 200       # PE上限（排除微利/异常）
+PE_MIN = 0         # PE下限（≤0=亏损）
 
-# 阈值配置
-ROE_MIN = 5.0        # 扣非ROE最低阈值（%）
-NP_YOY_MIN = 0.0     # 净利润同比增速最低阈值（%）
-
-# 批量查询大小（避免单次请求过大）
-BATCH_SIZE = 50
-
-
-def _stock_code_to_ifind(code: str) -> str:
-    """
-    将纯数字股票代码转为 iFinD 格式。
-    600936 → 600936.SH  (6开头=上交所)
-    300065 → 300065.SZ  (0/3开头=深交所)
-    已带后缀的原样返回。
-    """
-    code = code.strip()
-    if "." in code:
-        return code
-    if code.startswith("6"):
-        return f"{code}.SH"
-    else:
-        return f"{code}.SZ"
+# 批量请求大小
+BATCH_SIZE = 80
 
 
-def _ifind_code_to_plain(code: str) -> str:
-    """iFinD代码 → 纯数字代码"""
-    return code.split(".")[0] if "." in code else code
+def log(msg):
+    print(f"  [fundamental] {msg}", flush=True)
 
 
-def _query_basic_data(api: iFinD, ifind_codes: list) -> dict:
-    """
-    批量查询 ths_roe_deducted_stock 和 ths_np_yoy_stock。
-    返回 {ifind_code: {"roe": float|None, "np_yoy": float|None}}
-    """
-    indicators = ["ths_roe_deducted_stock", "ths_np_yoy_stock"]
+def _tencent_batch_pe(codes: list) -> dict:
+    """腾讯行情批量获取PE，返回 {code: pe_value_or_None}"""
     result = {}
+    # 构建前缀代码
+    tc_codes = []
+    for c in codes:
+        c = str(c).split(".")[0]
+        prefix = "sh" if c.startswith("6") else "sz"
+        tc_codes.append(f"{prefix}{c}")
 
-    for i in range(0, len(ifind_codes), BATCH_SIZE):
-        batch = ifind_codes[i:i + BATCH_SIZE]
-        codes_str = ",".join(batch)
-
-        indipara = [
-            {"indicator": ind, "indiparams": []} for ind in indicators
-        ]
-        params = {"codes": codes_str, "indipara": indipara}
-
+    for i in range(0, len(tc_codes), BATCH_SIZE):
+        batch = tc_codes[i:i + BATCH_SIZE]
+        qs = ",".join(batch)
+        url = f"https://qt.gtimg.cn/q={qs}"
         try:
-            data = api._post("basic_data_service", params)
-        except Exception as e:
-            print(f"[v10_filter] API请求异常: {e}")
-            # 异常时这批股票数据全部记为 None
-            for c in batch:
-                result[c] = {"roe": None, "np_yoy": None}
-            continue
-
-        if not data or "tables" not in data:
-            for c in batch:
-                result[c] = {"roe": None, "np_yoy": None}
-            continue
-
-        tables = data["tables"]
-        if isinstance(tables, list):
-            for row in tables:
-                code = row.get("codes", row.get("code", ""))
-                roe_val = row.get("ths_roe_deducted_stock", None)
-                np_yoy_val = row.get("ths_np_yoy_stock", None)
-                result[code] = {"roe": roe_val, "np_yoy": np_yoy_val}
-        elif isinstance(tables, dict):
-            # 某些情况下 tables 可能是 dict 结构
-            for code in batch:
-                result[code] = {
-                    "roe": tables.get("ths_roe_deducted_stock"),
-                    "np_yoy": tables.get("ths_np_yoy_stock"),
-                }
-
-        # 确保 batch 中每个代码都有记录
-        for c in batch:
-            if c not in result:
-                result[c] = {"roe": None, "np_yoy": None}
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            resp = urllib.request.urlopen(req, timeout=10)
+            raw = resp.read().decode("gbk", errors="ignore")
+            for line in raw.strip().split(";"):
+                if "=" not in line or "~" not in line:
+                    continue
+                parts = line.split("=")[1].strip('"').split("~")
+                if len(parts) < 40:
+                    continue
+                code = parts[2]
+                pe_str = parts[39]
+                try:
+                    pe = float(pe_str) if pe_str else None
+                except (ValueError, TypeError):
+                    pe = None
+                name = parts[1]
+                result[code] = {"pe": pe, "name": name}
+        except Exception:
+            pass
+        time.sleep(0.1)
 
     return result
+
+
+def _ifind_fundamental(codes: list) -> dict:
+    """iFinD降级：批量查ROE和净利润同比"""
+    if not HAS_IFIND:
+        return {}
+
+    try:
+        from ifind_http_api import iFinD as _iFinD  # noqa: F811
+        from v10_fundamental_filter_orig import _stock_code_to_ifind, _query_basic_data, ROE_MIN, NP_YOY_MIN  # type: ignore
+    except ImportError:
+        # 旧版v10_fundamental_filter不存在时，直接用iFinD查
+        return _ifind_fundamental_direct(codes)
+
+    try:
+        ifind_codes = [_stock_code_to_ifind(c) for c in codes]
+        data = _query_basic_data(_iFinD, ifind_codes)
+        result = {}
+        for ic, info in data.items():
+            bare = ic.split(".")[0]
+            result[bare] = {
+                "roe": info.get("roe"),
+                "np_yoy": info.get("np_yoy"),
+            }
+        return result
+    except Exception:
+        return {}
+
+
+def _ifind_fundamental_direct(codes: list) -> dict:
+    """iFinD降级（无旧版filter依赖时直接查）"""
+    if not HAS_IFIND:
+        return {}
+    try:
+        from ifind_http_api import iFinD as _api
+        ifind_codes = []
+        for c in codes:
+            bare = str(c).split(".")[0]
+            suffix = ".SH" if bare.startswith("6") else ".SZ"
+            ifind_codes.append(f"{bare}{suffix}")
+
+        indicators = ["ths_roe_deducted_stock", "ths_np_yoy_stock"]
+        indipara = [{"indicator": ind, "indiparams": []} for ind in indicators]
+        params = {"codes": ",".join(ifind_codes[:50]), "indipara": indipara}
+        data = _api._post("basic_data_service", params)
+        if not data or "tables" not in data:
+            return {}
+        result = {}
+        tables = data["tables"]
+        rows = tables if isinstance(tables, list) else []
+        for row in rows:
+            code = str(row.get("codes", row.get("code", "")))
+            bare = code.split(".")[0]
+            roe = row.get("ths_roe_deducted_stock")
+            np_yoy = row.get("ths_np_yoy_stock")
+            result[bare] = {"roe": roe, "np_yoy": np_yoy}
+        return result
+    except Exception:
+        return {}
 
 
 def filter_by_fundamental(stocks: list) -> tuple:
@@ -111,8 +146,7 @@ def filter_by_fundamental(stocks: list) -> tuple:
         stocks: 股票列表，每项可以是:
             - 纯代码字符串: "600936"
             - iFinD格式: "600936.SH"
-            - dict: {"code": "600936", "name": "旗滨集团"} 或
-                    {"code": "600936.SH", "name": "旗滨集团"}
+            - dict: {"code": "600936", "name": "旗滨集团"}
 
     返回:
         (passed_stocks, rejected_stocks) 元组，其中:
@@ -123,7 +157,7 @@ def filter_by_fundamental(stocks: list) -> tuple:
     if not stocks:
         return [], []
 
-    # 解析输入：提取 (原始项, 代码, 名称, iFinD代码)
+    # 解析输入
     parsed = []
     for s in stocks:
         if isinstance(s, dict):
@@ -135,93 +169,137 @@ def filter_by_fundamental(stocks: list) -> tuple:
         else:
             raw_code = str(s)
             name = ""
-
-        ifind_code = _stock_code_to_ifind(raw_code)
+        bare_code = raw_code.split(".")[0] if "." in raw_code else raw_code
         parsed.append({
             "original": s,
-            "raw_code": raw_code,
+            "bare_code": bare_code,
             "name": name,
-            "ifind_code": ifind_code,
         })
 
-    # ===== 第一轮：名称规则过滤（无需API调用） =====
-    need_api = []       # 需要查API的
-    rejected = []       # 被排除的
+    # ===== 第一轮：名称规则过滤（无需API） =====
+    need_pe = []
+    rejected = []
 
     for item in parsed:
         name = item["name"]
         reasons = []
 
-        # ST / *ST 排除
         if name:
             if "*ST" in name or "*st" in name:
                 reasons.append(f"名称含*ST: {name}")
             elif "ST" in name or "st" in name:
                 reasons.append(f"名称含ST: {name}")
+            if "退" in name:
+                reasons.append(f"名称含退: {name}")
+            if name.startswith("N"):
+                reasons.append(f"次新股首日: {name}")
 
         if reasons:
             rejected.append({"stock": item["original"], "reasons": reasons})
         else:
-            need_api.append(item)
+            need_pe.append(item)
 
-    if not need_api:
+    if not need_pe:
         return [], rejected
 
-    # ===== 第二轮：API查询 ROE 和 净利润同比 =====
-    api = iFinD
-    ifind_codes = [item["ifind_code"] for item in need_api]
-    data = _query_basic_data(api, ifind_codes)
+    # ===== 第二轮：腾讯行情PE过滤 =====
+    log(f"腾讯PE过滤 {len(need_pe)} 只...")
+    codes_for_pe = [item["bare_code"] for item in need_pe]
+    pe_data = _tencent_batch_pe(codes_for_pe)
 
-    passed = []
-    for item in need_api:
-        ic = item["ifind_code"]
-        info = data.get(ic, {"roe": None, "np_yoy": None})
-        roe = info.get("roe")
-        np_yoy = info.get("np_yoy")
-        reasons = []
+    # 合并腾讯返回的名称
+    for item in need_pe:
+        code = item["bare_code"]
+        if code in pe_data and not item["name"]:
+            item["name"] = pe_data[code].get("name", "")
 
-        # ROE 过滤
-        if roe is not None:
-            try:
-                roe_f = float(roe)
-                if roe_f < ROE_MIN:
-                    reasons.append(f"扣非ROE={roe_f:.2f}% < {ROE_MIN}%")
-            except (ValueError, TypeError):
-                pass  # 无法解析时不作为排除理由
-        # 如果ROE为None，不排除（容错）
+    # PE过滤
+    passed_pe = []
+    rejected_by_pe = []
+    need_ifind = []  # PE获取失败的，尝试iFinD
 
-        # 净利润同比 过滤
-        if np_yoy is not None:
-            try:
-                np_yoy_f = float(np_yoy)
-                if np_yoy_f < NP_YOY_MIN:
-                    reasons.append(f"净利润同比={np_yoy_f:.2f}% < {NP_YOY_MIN}%")
-            except (ValueError, TypeError):
-                pass
+    for item in need_pe:
+        code = item["bare_code"]
+        info = pe_data.get(code, {})
+        pe = info.get("pe")
+        name = item["name"] or info.get("name", code)
 
-        if reasons:
-            rejected.append({"stock": item["original"], "reasons": reasons})
+        if pe is not None:
+            if pe <= PE_MIN:
+                rejected_by_pe.append({"stock": item["original"], "reasons": [f"PE={pe:.1f}≤0（亏损股）: {name}"]})
+            elif pe > PE_MAX:
+                rejected_by_pe.append({"stock": item["original"], "reasons": [f"PE={pe:.1f}>{PE_MAX}（微利/异常）: {name}"]})
+            else:
+                passed_pe.append(item)
         else:
-            passed.append(item["original"])
+            # PE获取失败，尝试iFinD降级
+            need_ifind.append(item)
 
+    if rejected_by_pe:
+        log(f"PE排除 {len(rejected_by_pe)} 只")
+    rejected.extend(rejected_by_pe)
+
+    # ===== 第三轮：iFinD降级（仅对PE获取失败的股票） =====
+    if need_ifind and HAS_IFIND:
+        log(f"iFinD降级过滤 {len(need_ifind)} 只（PE获取失败）...")
+        ifind_codes = [item["bare_code"] for item in need_ifind]
+        ifind_data = _ifind_fundamental(ifind_codes)
+
+        ifind_passed = []
+        ifind_rejected = []
+
+        for item in need_ifind:
+            code = item["bare_code"]
+            info = ifind_data.get(code, {})
+            roe = info.get("roe")
+            np_yoy = info.get("np_yoy")
+            reasons = []
+
+            if roe is not None:
+                try:
+                    roe_f = float(roe)
+                    if roe_f < 5:
+                        reasons.append(f"扣非ROE={roe_f:.1f}%<5%")
+                except (ValueError, TypeError):
+                    pass
+
+            if np_yoy is not None:
+                try:
+                    np_yoy_f = float(np_yoy)
+                    if np_yoy_f < 0:
+                        reasons.append(f"净利润同比={np_yoy_f:.1f}%<0%")
+                except (ValueError, TypeError):
+                    pass
+
+            if reasons:
+                ifind_rejected.append({"stock": item["original"], "reasons": reasons})
+            else:
+                ifind_passed.append(item)
+
+        if ifind_rejected:
+            log(f"iFinD排除 {len(ifind_rejected)} 只")
+        rejected.extend(ifind_rejected)
+        passed_pe.extend(ifind_passed)
+    elif need_ifind:
+        # iFinD不可用，PE也没拿到，保守放行
+        log(f"⚠️ {len(need_ifind)}只PE数据缺失且iFinD不可用，保守放行")
+        passed_pe.extend(need_ifind)
+
+    passed = [item["original"] for item in passed_pe]
     return passed, rejected
 
 
-# ===== 命令行测试 =====
+# ===== CLI测试 =====
 if __name__ == "__main__":
-    import json
-
     test_stocks = [
-        {"code": "600936", "name": "旗滨集团"},
-        {"code": "300065", "name": "海兰信"},
         {"code": "600519", "name": "贵州茅台"},
         {"code": "000001", "name": "平安银行"},
-        {"code": "601318", "name": "中国平安"},
-        {"code": "000725", "name": "*ST京东方A"},  # 应被ST规则排除
+        {"code": "300410", "name": "正业科技"},
+        {"code": "000725", "name": "*ST京东方A"},
+        {"code": "600234", "name": "ST天龙"},
     ]
-
     print("=" * 60)
-    print("V10 基本面过滤测试")
+    print("V10 基本面过滤测试（腾讯PE + iFinD降级）")
     print("=" * 60)
 
     passed, rejected = filter_by_fundamental(test_stocks)
