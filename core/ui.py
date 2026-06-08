@@ -254,7 +254,10 @@ GLOBAL_CSS = """
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
 
     /* ========== 隐藏元素 ========== */
-    #MainMenu, header, footer { visibility: hidden; }
+    #MainMenu, footer { visibility: hidden; }
+    /* 隐藏顶栏内容但保留侧边栏折叠按钮 */
+    header { background: transparent; }
+    header .header-decoration, header .appview-header-container > div:first-child { visibility: hidden; }
     .stDeployButton { display: none; }
     .block-container { padding-top: 1rem; }
 
@@ -636,7 +639,9 @@ def inject_global_css():
     .status-dot-off {{ background: var(--up-color); }}
     @keyframes pulse {{ 0%,100%{{opacity:1}} 50%{{opacity:0.5}} }}
     /* ========== 隐藏元素 ========== */
-    #MainMenu, header, footer {{ visibility: hidden; }}
+    #MainMenu, footer {{ visibility: hidden; }}
+    header {{ background: transparent; }}
+    header .header-decoration, header .appview-header-container > div:first-child {{ visibility: hidden; }}
     .stDeployButton {{ display: none; }}
     .block-container {{ padding-top: 1rem; }}
 
