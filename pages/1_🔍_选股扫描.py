@@ -188,12 +188,12 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
         st.caption(f"⚠️ 推荐生成失败: {e}")
 
 
-def _render_stock_actions(code, name, price, stop_loss=0, target_price=0):
+def _render_stock_actions(code, name, price, stop_loss=0, target_price=0, key_prefix=""):
     """渲染单只股票的操作按钮：加入盯盘 + 加入持仓"""
     col_watch, col_hold, col_spacer = st.columns([1, 1, 4])
 
     with col_watch:
-        if st.button("👁️ 加入盯盘", key=f"watch_{code}"):
+        if st.button("👁️ 加入盯盘", key=f"{key_prefix}watch_{code}"):
             existing = [w["code"] for w in get_watchlist()]
             if code in existing:
                 st.toast(f"⚠️ {code} 已在盯盘列表中", icon="⚠️")
@@ -203,31 +203,31 @@ def _render_stock_actions(code, name, price, stop_loss=0, target_price=0):
 
     with col_hold:
         with st.expander("💼 加入持仓"):
-            with st.form(key=f"hold_form_{code}", clear_on_submit=True):
+            with st.form(key=f"{key_prefix}hold_form_{code}", clear_on_submit=True):
                 st.markdown(f"**{code} — {name}**")
                 fcol1, fcol2 = st.columns(2)
                 with fcol1:
                     buy_price = st.number_input(
                         "买入价格", value=float(price), min_value=0.01,
-                        step=0.01, format="%.2f", key=f"bp_{code}"
+                        step=0.01, format="%.2f", key=f"{key_prefix}bp_{code}"
                     )
                 with fcol2:
                     quantity = st.number_input(
                         "买入数量（股）", value=100, min_value=100,
-                        step=100, key=f"qty_{code}"
+                        step=100, key=f"{key_prefix}qty_{code}"
                     )
                 fcol3, fcol4 = st.columns(2)
                 with fcol3:
                     sl = st.number_input(
                         "止损价", value=float(stop_loss) if stop_loss else 0.0,
-                        min_value=0.0, step=0.01, format="%.2f", key=f"sl_{code}"
+                        min_value=0.0, step=0.01, format="%.2f", key=f"{key_prefix}sl_{code}"
                     )
                 with fcol4:
                     tp = st.number_input(
                         "目标价", value=float(target_price) if target_price else 0.0,
-                        min_value=0.0, step=0.01, format="%.2f", key=f"tp_{code}"
+                        min_value=0.0, step=0.01, format="%.2f", key=f"{key_prefix}tp_{code}"
                     )
-                notes = st.text_input("备注", "", key=f"notes_{code}")
+                notes = st.text_input("备注", "", key=f"{key_prefix}notes_{code}")
 
                 if st.form_submit_button("✅ 确认添加", type="primary", width='stretch'):
                     add_position(
@@ -244,6 +244,14 @@ def _render_results(results):
     v10_results = [r for r in results if r.get("type") == "v10"]
     pullback_results = [r for r in results if r.get("type") == "pullback"]
     classic_results = [r for r in results if r.get("type") == "classic"]
+    _seen_keys = {}  # key_suffix counter to guarantee unique Streamlit keys
+
+    def _unique_prefix(base, code):
+        """生成唯一的 key 前缀，防止同一 code 在不同分组重复"""
+        k = f"{base}_{code}"
+        cnt = _seen_keys.get(k, 0)
+        _seen_keys[k] = cnt + 1
+        return f"{base}{cnt}_" if cnt > 0 else f"{base}_"
 
     if v10_results:
         st.html('<h2>🏆 V10 信号 · 6维评分 · 买入推荐</h2>')
@@ -319,6 +327,7 @@ def _render_results(results):
             )
             _render_stock_actions(
                 code=r["code"], name=r["name"], price=r["price"],
+                key_prefix=_unique_prefix("v10", r["code"]),
             )
 
     if pullback_results:
@@ -381,6 +390,7 @@ def _render_results(results):
             )
             _render_stock_actions(
                 code=r["code"], name=r["name"], price=r["price"],
+                key_prefix=_unique_prefix("pb", r["code"]),
             )
 
     if classic_results:
@@ -421,6 +431,7 @@ def _render_results(results):
             """)
             _render_stock_actions(
                 code=r["code"], name=r["name"], price=r["price"],
+                key_prefix=_unique_prefix("cl", r["code"]),
             )
 
 
