@@ -96,11 +96,13 @@ scan_mode = st.radio("扫描范围", ["全市场", "自选股"], horizontal=True
 
 
 def _render_recommendation(code, name, signal_type, score, change_pct=0):
-    """渲染单只股票的6维评分+买入推荐（紧凑版）"""
+    """渲染单只股票的6维评分+买入推荐（紧凑版）
+    返回 BuyRecommendation 对象供外部标签使用，失败返回None
+    """
     try:
         hist = get_stock_history(code, days=250)
         if hist.empty or len(hist) < 20:
-            return
+            return None
 
         close_arr = hist["close"].values.astype(np.float64)
         high_arr = hist["high"].values.astype(np.float64)
@@ -123,7 +125,7 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
             sector_score=sector_score,
         )
         if not rec:
-            return
+            return None
 
         # ---- 进场建议标签 ----
         action = rec.action
@@ -210,8 +212,10 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
         # ---- 风险提示 ----
         st.caption(f"⚠️ {rec.risk_note}")
 
+        return rec
     except Exception as e:
         st.caption(f"⚠️ 推荐生成失败: {e}")
+        return None
 
 
 def _render_stock_actions(code, name, price, stop_loss=0, target_price=0, key_prefix=""):
@@ -325,30 +329,42 @@ def _render_results(results):
                     _extra_parts.append("<span style='color:#ef4444;'>已涨停</span>")
             _extra_html = " · ".join(_extra_parts) if _extra_parts else ""
 
-            # 进场建议标签（基于推荐引擎的level和action）
-            _level_color_map = {
-                "强烈推荐": "#ff4b4b",
-                "值得关注": "#ffab40",
-                "观察等待": "#ffeb3b",
-                "暂不推荐": "#888888",
-            }
-            _level_bg = "#888888"
-            _level_text = "⚪ 暂不推荐"
-            # 从_render_recommendation的rec里取level不太方便，直接用score和signal_type判断
-            _total_score = r.get("score", 0)
-            _signal_type = signal_type
-            if _total_score >= 80 or (_signal_type == "全买入" and _total_score >= 60):
-                _level_text = "🔴 可进场"
-                _level_bg = "#ff4b4b"
-            elif _total_score >= 60 or (_signal_type == "强庄买" and _total_score >= 50):
-                _level_text = "🟠 建议买入"
-                _level_bg = "#ffab40"
-            elif _total_score >= 40:
-                _level_text = "🟡 观察等回调"
-                _level_bg = "#b39700"
+            # 先渲染推荐详情，拿到rec对象（统一评分来源，避免标签和详情矛盾）
+            rec = _render_recommendation(
+                code=r["code"], name=r["name"],
+                signal_type=signal_type, score=r["score"],
+            )
+
+            # 进场建议标签 — 直接用推荐引擎的结论，不自做主张
+            if rec:
+                _level_text = rec.level  # 🔴 强烈推荐 / 🟠 值得关注 / 🟡 观察等待 / ⚪ 暂不推荐
+                _action_text = rec.action  # 具体操作建议
+                _total_score = rec.total_score
+                # 标签颜色映射
+                if "强烈" in _level_text:
+                    _level_bg = "#ff4b4b"
+                elif "关注" in _level_text:
+                    _level_bg = "#ffab40"
+                elif "观察" in _level_text:
+                    _level_bg = "#b39700"
+                else:
+                    _level_bg = "#888888"
             else:
-                _level_text = "⚪ 暂不建议"
-                _level_bg = "#888888"
+                # 推荐引擎失败时的降级：用V10策略分+信号类型粗估
+                _total_score = r.get("score", 0)
+                _action_text = ""
+                if _total_score >= 80 or (signal_type == "全买入" and _total_score >= 60):
+                    _level_text = "🔴 强烈推荐"
+                    _level_bg = "#ff4b4b"
+                elif _total_score >= 60 or (signal_type == "强庄买" and _total_score >= 50):
+                    _level_text = "🟠 值得关注"
+                    _level_bg = "#ffab40"
+                elif _total_score >= 40:
+                    _level_text = "🟡 观察等待"
+                    _level_bg = "#b39700"
+                else:
+                    _level_text = "⚪ 暂不推荐"
+                    _level_bg = "#888888"
 
             st.html(f"""
             <div class="scan-result-card" style="border-left:4px solid {border_color};">
@@ -373,10 +389,7 @@ def _render_results(results):
             </div>
             """)
 
-            _render_recommendation(
-                code=r["code"], name=r["name"],
-                signal_type=signal_type, score=r["score"],
-            )
+            # rec 已在上面渲染，无需重复调用
             _render_stock_actions(
                 code=r["code"], name=r["name"], price=r["price"],
                 key_prefix=_unique_prefix("v10", r["code"]),
@@ -415,6 +428,27 @@ def _render_results(results):
                     _pb_parts.append("<span style='color:#ef4444;'>已涨停</span>")
             _pb_extra = " · ".join(_pb_parts) if _pb_parts else ""
 
+            # 先渲染推荐详情，拿rec对象
+            _pb_rec = _render_recommendation(
+                code=r["code"], name=r["name"],
+                signal_type="基础买", score=r["score"],
+            )
+
+            # 波段回调标签 — 用推荐引擎结论
+            if _pb_rec:
+                _pb_level_text = _pb_rec.level
+                if "强烈" in _pb_level_text:
+                    _pb_level_bg = "#ff4b4b"
+                elif "关注" in _pb_level_text:
+                    _pb_level_bg = "#ffab40"
+                elif "观察" in _pb_level_text:
+                    _pb_level_bg = "#b39700"
+                else:
+                    _pb_level_bg = "#888888"
+            else:
+                _pb_level_text = r.get('level', '基础买')
+                _pb_level_bg = "#ab47bc"
+
             st.html(f"""
             <div class="scan-result-card" style="border-left:4px solid #ab47bc;">
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
@@ -427,7 +461,7 @@ def _render_results(results):
                         <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
                     </div>
                     <div style="display:flex; gap:10px; align-items:center;">
-                        <span class="tag tag-info">{r.get('level', '')}</span>
+                        <span style="background:{_pb_level_bg}; color:#fff; padding:2px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">{_pb_level_text}</span>
                         <span style="color:#ff6b35; font-weight:700;">{r['score']}分</span>
                         <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
                     </div>
@@ -436,10 +470,6 @@ def _render_results(results):
             </div>
             """)
 
-            _render_recommendation(
-                code=r["code"], name=r["name"],
-                signal_type="基础买", score=r["score"],
-            )
             _render_stock_actions(
                 code=r["code"], name=r["name"], price=r["price"],
                 key_prefix=_unique_prefix("pb", r["code"]),
