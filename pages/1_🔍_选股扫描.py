@@ -127,32 +127,6 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
         if not rec:
             return None
 
-        # ---- 进场建议标签 ----
-        action = rec.action
-        level = rec.level
-        if "强烈" in action or "强烈推荐" in level:
-            action_bg = "#ff4b4b"
-        elif "建议买入" in action or "值得关注" in level:
-            action_bg = "#ffab40"
-        elif "观察" in action or "观察等待" in level:
-            action_bg = "#b39700"
-        else:
-            action_bg = "#888888"
-        rr_color = "#00c853" if rec.risk_reward >= 2.0 else "#ffab40" if rec.risk_reward >= 1.5 else "#ff4b4b"
-
-        st.html(f"""
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:4px;">
-            <div style="display:flex; gap:8px; align-items:center;">
-                <span style="background:{action_bg}; color:#fff; padding:3px 12px; border-radius:4px; font-size:0.9em; font-weight:700;">{action}</span>
-                <span style="color:var(--text-secondary); font-size:0.85em;">{rec.hold_days}</span>
-            </div>
-            <div style="display:flex; gap:12px; align-items:center; font-size:0.85em;">
-                <span style="color:var(--text-secondary);">盈亏比 <b style="color:{rr_color};">{rec.risk_reward}:1</b></span>
-                <span style="color:var(--text-secondary);">仓位 <b style="color:var(--text-primary);">{rec.position_pct}%</b></span>
-            </div>
-        </div>
-        """)
-
         # ---- 紧凑评分条 ----
         dim_parts = []
         for d in rec.dimensions:
@@ -274,6 +248,17 @@ def _render_results(results):
     v10_results = [r for r in results if r.get("type") == "v10"]
     pullback_results = [r for r in results if r.get("type") == "pullback"]
     classic_results = [r for r in results if r.get("type") == "classic"]
+    
+    # 去重：同一code可能出现在多个分组，按优先级V10>波段回调>经典，只保留首次出现
+    _dedup_seen = set()
+    for group in [v10_results, pullback_results, classic_results]:
+        filtered = []
+        for r in group:
+            if r['code'] not in _dedup_seen:
+                _dedup_seen.add(r['code'])
+                filtered.append(r)
+        group[:] = filtered
+    
     _seen_keys = {}  # key_suffix counter to guarantee unique Streamlit keys
 
     def _unique_prefix(base, code):
@@ -335,36 +320,39 @@ def _render_results(results):
                 signal_type=signal_type, score=r["score"],
             )
 
-            # 进场建议标签 — 直接用推荐引擎的结论，不自做主张
+            # 进场建议标签 — 直接用推荐引擎的结论
             if rec:
-                _level_text = rec.level  # 🔴 强烈推荐 / 🟠 值得关注 / 🟡 观察等待 / ⚪ 暂不推荐
-                _action_text = rec.action  # 具体操作建议
-                _total_score = rec.total_score
+                _badge_text = rec.action  # 具体操作建议（🔴 强烈建议买入 / 🟡 继续观察…）
+                _score_display = f"{rec.total_score:.0f}分"
+                _hold_days = rec.hold_days
                 # 标签颜色映射
-                if "强烈" in _level_text:
+                if "强烈" in rec.level:
                     _level_bg = "#ff4b4b"
-                elif "关注" in _level_text:
+                elif "关注" in rec.level:
                     _level_bg = "#ffab40"
-                elif "观察" in _level_text:
+                elif "观察" in rec.level:
                     _level_bg = "#b39700"
                 else:
                     _level_bg = "#888888"
             else:
-                # 推荐引擎失败时的降级：用V10策略分+信号类型粗估
+                # 推荐引擎失败时的降级
+                _score_display = f"{r.get('score', 0)}分"
+                _hold_days = ""
                 _total_score = r.get("score", 0)
-                _action_text = ""
                 if _total_score >= 80 or (signal_type == "全买入" and _total_score >= 60):
-                    _level_text = "🔴 强烈推荐"
+                    _badge_text = "🔴 强烈建议买入"
                     _level_bg = "#ff4b4b"
                 elif _total_score >= 60 or (signal_type == "强庄买" and _total_score >= 50):
-                    _level_text = "🟠 值得关注"
+                    _badge_text = "🟠 建议买入"
                     _level_bg = "#ffab40"
                 elif _total_score >= 40:
-                    _level_text = "🟡 观察等待"
+                    _badge_text = "🟡 继续观察"
                     _level_bg = "#b39700"
                 else:
-                    _level_text = "⚪ 暂不推荐"
+                    _badge_text = "⚪ 暂不推荐"
                     _level_bg = "#888888"
+
+            _hold_display = f'<span style="color:var(--text-secondary); font-size:0.85em; margin-left:6px;">{_hold_days}</span>' if _hold_days and _hold_days != "-" else ''
 
             st.html(f"""
             <div class="scan-result-card" style="border-left:4px solid {border_color};">
@@ -379,9 +367,10 @@ def _render_results(results):
                         <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
                     </div>
                     <div style="display:flex; gap:10px; align-items:center;">
-                        <span style="background:{_level_bg}; color:#fff; padding:2px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">{_level_text}</span>
+                        <span style="background:{_level_bg}; color:#fff; padding:2px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">{_badge_text}</span>
                         <span class="tag tag-accent">{signal_type}</span>
-                        <span style="color:#ff6b35; font-weight:700;">{r['score']}分</span>
+                        <span style="color:#ff6b35; font-weight:700;">{_score_display}</span>
+                        {_hold_display}
                         <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
                     </div>
                 </div>
@@ -436,18 +425,24 @@ def _render_results(results):
 
             # 波段回调标签 — 用推荐引擎结论
             if _pb_rec:
-                _pb_level_text = _pb_rec.level
-                if "强烈" in _pb_level_text:
+                _pb_badge = _pb_rec.action
+                _pb_score_display = f"{_pb_rec.total_score:.0f}分"
+                _pb_hold = _pb_rec.hold_days
+                if "强烈" in _pb_rec.level:
                     _pb_level_bg = "#ff4b4b"
-                elif "关注" in _pb_level_text:
+                elif "关注" in _pb_rec.level:
                     _pb_level_bg = "#ffab40"
-                elif "观察" in _pb_level_text:
+                elif "观察" in _pb_rec.level:
                     _pb_level_bg = "#b39700"
                 else:
                     _pb_level_bg = "#888888"
             else:
-                _pb_level_text = r.get('level', '基础买')
+                _pb_badge = r.get('level', '基础买')
+                _pb_score_display = f"{r['score']}分"
+                _pb_hold = ""
                 _pb_level_bg = "#ab47bc"
+
+            _pb_hold_display = f'<span style="color:var(--text-secondary); font-size:0.85em; margin-left:6px;">{_pb_hold}</span>' if _pb_hold and _pb_hold != "-" else ''
 
             st.html(f"""
             <div class="scan-result-card" style="border-left:4px solid #ab47bc;">
@@ -461,8 +456,9 @@ def _render_results(results):
                         <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
                     </div>
                     <div style="display:flex; gap:10px; align-items:center;">
-                        <span style="background:{_pb_level_bg}; color:#fff; padding:2px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">{_pb_level_text}</span>
-                        <span style="color:#ff6b35; font-weight:700;">{r['score']}分</span>
+                        <span style="background:{_pb_level_bg}; color:#fff; padding:2px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">{_pb_badge}</span>
+                        <span style="color:#ff6b35; font-weight:700;">{_pb_score_display}</span>
+                        {_pb_hold_display}
                         <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
                     </div>
                 </div>
