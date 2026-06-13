@@ -492,11 +492,15 @@ if st.button("🚀 开始扫描", type="primary", width='stretch'):
     if not all_selected:
         st.warning("请至少选择一个策略！")
     else:
+        import time as _time
+        _scan_start = _time.time()
         st.write("⏳ 正在扫描中...V10全市场扫描约需1-2分钟")
         progress_bar = st.progress(0)
         status_text = st.empty()
+        _scan_total_box = [0]  # 用list绕过nonlocal限制
 
         def on_progress(current, total):
+            _scan_total_box[0] = total
             pct = min(current / total, 1.0) if total > 0 else 0
             progress_bar.progress(pct)
             status_text.text(f"扫描进度: {current}/{total} ({pct*100:.0f}%)")
@@ -510,31 +514,40 @@ if st.button("🚀 开始扫描", type="primary", width='stretch'):
             results = []
             st.error(f"❌ 扫描异常: {e}")
 
+        _scan_elapsed = _time.time() - _scan_start
         progress_bar.progress(1.0)
-        status_text.text("扫描完成！")
+        status_text.text(f"扫描完成！共扫描 {_scan_total_box[0]} 只股票，耗时 {_scan_elapsed:.1f}s")
 
-        # 存入session_state
+        # 存入session_state（包括空结果和统计信息）
         st.session_state["scan_results"] = results
+        st.session_state["scan_count"] = _scan_total_box[0]
+        st.session_state["scan_elapsed"] = _scan_elapsed
         st.rerun()
 
 # 显示结果（优先取session_state缓存）
-if "scan_results" in st.session_state and st.session_state["scan_results"]:
-    results = st.session_state["scan_results"]
-    st.success(f"🎯 共 {len(results)} 个信号（上次扫描结果）")
-    _render_results(results)
+_has_results = "scan_results" in st.session_state
+_results_list = st.session_state.get("scan_results", [])
+if _has_results:
+    if _results_list:
+        st.success(f"🎯 共 {len(_results_list)} 个信号（上次扫描结果）")
+        _render_results(_results_list)
 
-    # 发送飞书
-    if st.button("📤 发送到飞书"):
-        signal_dicts = []
-        for r in results:
-            signal_dicts.append({
-                "code": r["code"], "name": r["name"],
-                "strategy": r["strategy"], "price": r["price"],
-            })
-        if send_batch_signals(signal_dicts):
-            st.success("已发送到飞书！")
-        else:
-            st.warning("发送失败，请检查Webhook配置")
+        # 发送飞书
+        if st.button("📤 发送到飞书"):
+            signal_dicts = []
+            for r in _results_list:
+                signal_dicts.append({
+                    "code": r["code"], "name": r["name"],
+                    "strategy": r["strategy"], "price": r["price"],
+                })
+            if send_batch_signals(signal_dicts):
+                st.success("已发送到飞书！")
+            else:
+                st.warning("发送失败，请检查Webhook配置")
+    else:
+        _count = st.session_state.get("scan_count", 0)
+        _elapsed = st.session_state.get("scan_elapsed", 0)
+        st.info(f"🔍 扫描完成，共 {_count} 只股票，耗时 {_elapsed:.1f}s，当前无符合条件的信号。\n\n💡 V10全买入策略要求七条件同时共振，信号稀少是正常的。可尝试：\n- 开启更多策略（波段回调、趋势波段）\n- 等待盘中行情变化后重新扫描")
 
 # 快速入口
 st.divider()
