@@ -16,6 +16,7 @@ from core.v10.data_service import (
     WATCHLIST_PATH,
     PREFETCH_PATH,
     SUMMARY_PATH,
+    RECOMMEND_PATH,
 )
 
 st.set_page_config(page_title="尾盘选股", page_icon="🌅", layout="wide")
@@ -28,7 +29,17 @@ data = get_dashboard_data()
 watchlist = data["watchlist"]
 prefetch = data["prefetch"]
 summary_text = data["summary"]
+recommend = data["recommend"]
 freshness = data["freshness"]
+
+# 构建进场建议索引：code → recommend info
+_action_map = {}
+for item in recommend.get("recommend", []):
+    _action_map[item.get("code", "")] = item
+for item in recommend.get("observe", []):
+    _action_map[item.get("code", "")] = item
+for item in recommend.get("excluded", []):
+    _action_map[item.get("code", "")] = item
 
 # ===================================================================
 # 1. 大盘指数概览
@@ -337,6 +348,44 @@ for label, key, border_color in SIGNAL_GROUPS:
         vibe_str = f"Vibe {vibe_score}" if vibe_score is not None else ""
         conf_str = f"✅ {confirmation}" if confirmation else ""
 
+        # 进场建议标签
+        rec = _action_map.get(code)
+        if rec:
+            action = rec.get("action", "")
+            if action == "推荐进场":
+                action_tag = '<span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">✅ 可进场</span>'
+            elif action == "观察":
+                action_tag = '<span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">👁️ 观察</span>'
+            else:
+                action_tag = '<span style="background:#888; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">❌ 不建议</span>'
+            # 进场详情
+            entry = rec.get("entry_price", 0)
+            stop = rec.get("stop_loss", 0)
+            stop_pct = rec.get("stop_pct", "")
+            target = rec.get("target", 0)
+            target_pct = rec.get("target_pct", "")
+            position = rec.get("position", "")
+            rr = rec.get("risk_reward", "")
+            score = rec.get("score", 0)
+            detail_parts = []
+            if score:
+                detail_parts.append(f"评分 {score}")
+            if entry and entry > 0:
+                detail_parts.append(f"买入 ¥{entry:.2f}")
+            if stop and stop > 0:
+                detail_parts.append(f"止损 ¥{stop:.2f}({stop_pct})")
+            if target and target > 0:
+                detail_parts.append(f"目标 ¥{target:.2f}({target_pct})")
+            if position:
+                detail_parts.append(f"仓位 {position}")
+            if rr:
+                detail_parts.append(f"盈亏比 {rr}")
+            detail_str = " · ".join(detail_parts)
+            action_detail = f'<div style="margin-top:6px; color:var(--text-secondary); font-size:0.82em;">{detail_str}</div>' if detail_str else ""
+        else:
+            action_tag = ""
+            action_detail = ""
+
         st.html(f"""
         <div class="scan-result-card" style="border-left:4px solid {border_color};">
             <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
@@ -351,13 +400,124 @@ for label, key, border_color in SIGNAL_GROUPS:
                     <span class="tag tag-accent">{signal}</span>
                     {f'<span class="tag tag-info">{vibe_str}</span>' if vibe_str else ''}
                     {f'<span style="color:#00c853; font-size:0.85em;">{conf_str}</span>' if conf_str else ''}
+                    {action_tag}
                 </div>
             </div>
+            {action_detail}
         </div>
         """)
 
 if not has_any_signal:
     st.info("📭 暂无信号数据，请先运行扫描或预取")
+
+# ===================================================================
+# 3.5 进场建议汇总
+# ===================================================================
+rec_summary = recommend.get("summary", {})
+rec_list = recommend.get("recommend", [])
+obs_list = recommend.get("observe", [])
+exc_list = recommend.get("excluded", [])
+rec_count = rec_summary.get("recommend_count", len(rec_list))
+obs_count = rec_summary.get("observe_count", len(obs_list))
+exc_count = rec_summary.get("excluded_count", len(exc_list))
+
+if rec_list or obs_list:
+    st.html('<h2>🎯 进场建议</h2>')
+
+    # 冷静期提示
+    if rec_summary.get("in_cooldown"):
+        st.warning("🔴 **冷静期中** — 连续多次全亏，暂停推荐进场")
+
+    # 推荐进场卡片
+    if rec_list:
+        for item in rec_list:
+            sig = item.get("signal", "")
+            sig_emoji = item.get("signal_emoji", "⚪")
+            name = item.get("name", item.get("code", ""))
+            code = item.get("code", "")
+            score = item.get("score", 0)
+            entry = item.get("entry_price", 0)
+            change_pct = item.get("change_pct", 0)
+            stop = item.get("stop_loss", 0)
+            stop_pct = item.get("stop_pct", "")
+            target = item.get("target", 0)
+            target_pct = item.get("target_pct", "")
+            position = item.get("position", "")
+            rr = item.get("risk_reward", "")
+            reason = item.get("reason", "")
+
+            # 涨跌色
+            if change_pct > 0:
+                chg_color = "#ff4b4b"
+                chg_arrow = "▲"
+            elif change_pct < 0:
+                chg_color = "#00c853"
+                chg_arrow = "▼"
+            else:
+                chg_color = "var(--text-primary)"
+                chg_arrow = "—"
+
+            st.html(f"""
+            <div style="background:var(--bg-card); border:1px solid var(--border-color);
+                        border-left:4px solid #ff4b4b; border-radius:10px;
+                        padding:16px 20px; margin-bottom:12px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                    <div>
+                        <span style="font-weight:800; color:var(--text-primary); font-size:1.15em;">{sig_emoji} {name}</span>
+                        <span style="color:var(--text-secondary); margin-left:8px;">{code}</span>
+                        <span style="color:{chg_color}; font-weight:600; margin-left:12px;">
+                            ¥{entry:.2f} {chg_arrow} {change_pct:+.2f}%
+                        </span>
+                    </div>
+                    <div style="display:flex; gap:8px; align-items:center;">
+                        <span style="background:#ff4b4b; color:#fff; padding:3px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">✅ 可进场</span>
+                        <span class="tag tag-accent">{sig}</span>
+                        <span style="color:var(--text-secondary); font-size:0.85em;">评分 {score}</span>
+                    </div>
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:20px; font-size:0.9em; margin-bottom:8px;">
+                    <span style="color:var(--text-secondary);">买入 <b style="color:var(--text-primary);">¥{entry:.2f}</b></span>
+                    <span style="color:var(--text-secondary);">止损 <b style="color:#ff4b4b;">¥{stop:.2f}（{stop_pct}）</b></span>
+                    <span style="color:var(--text-secondary);">目标 <b style="color:#00c853;">¥{target:.2f}（{target_pct}）</b></span>
+                    <span style="color:var(--text-secondary);">仓位 <b style="color:var(--text-primary);">{position}</b></span>
+                    <span style="color:var(--text-secondary);">盈亏比 <b style="color:var(--text-primary);">{rr}</b></span>
+                </div>
+                {f'<div style="color:var(--text-secondary); font-size:0.82em;">💡 {reason}</div>' if reason else ''}
+            </div>
+            """)
+
+    # 观察池简要
+    if obs_list:
+        st.html(f'<h3 style="color:var(--text-primary);">👁️ 观察池 · {obs_count}只</h3>')
+        obs_rows = []
+        for item in obs_list:
+            sig_emoji = item.get("signal_emoji", "⚪")
+            name = item.get("name", item.get("code", ""))
+            code = item.get("code", "")
+            sig = item.get("signal", "")
+            score = item.get("score", 0)
+            entry = item.get("entry_price", 0)
+            stop = item.get("stop_loss", 0)
+            target = item.get("target", 0)
+            obs_rows.append(f'<span style="margin-right:16px;">{sig_emoji} {name}({code}) {sig} {score}分 · ¥{entry:.2f} 止损¥{stop:.2f} 目标¥{target:.2f}</span>')
+        st.html(f'<div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:12px 16px; font-size:0.88em; line-height:1.8;">{"".join(obs_rows)}</div>')
+
+elif recommend.get("update_time"):
+    # 有推荐数据但都空 = 全被过滤
+    st.html('<h2>🎯 进场建议</h2>')
+    if exc_count > 0:
+        st.warning(f"⛔ 今日无推荐进场标的 — {exc_count}只被过滤，暂不符合进场条件")
+    else:
+        st.info("📭 今日无信号，继续保持空仓等待")
+    # 排除详情
+    if exc_list:
+        with st.expander(f"查看被过滤详情（{exc_count}只）"):
+            for item in exc_list:
+                name = item.get("name", item.get("code", ""))
+                code = item.get("code", "")
+                sig = item.get("signal", "")
+                reason = item.get("reason", "")
+                st.html(f'<div style="margin-bottom:4px;"><span style="color:var(--text-secondary);">{name}({code})</span> <span class="tag tag-accent">{sig}</span> <span style="color:#ff4b4b; font-size:0.85em;">❌ {reason}</span></div>')
 
 # ===================================================================
 # 4. 候选股详情
@@ -539,61 +699,59 @@ _now = datetime.now().time()
 _trading = dt_time(9, 25) <= _now <= dt_time(15, 0)
 _prefetch_time = dt_time(14, 20) <= _now <= dt_time(15, 0)
 if not _trading:
-    st.info("⏰ 当前非交易时间（9:25-15:00），预取/汇总可能写入空数据。全扫描可随时运行。")
+    st.info("⏰ 当前非交易时间（9:25-15:00），数据可能为空。全扫描可随时运行。")
 elif _prefetch_time:
-    st.success("🟢 尾盘时段（14:20-15:00），建议点击预取+汇总获取实时数据")
+    st.success("🟢 尾盘时段（14:20-15:00），一键扫描获取实时数据")
 
-btn_cols = st.columns(3)
-with btn_cols[0]:
-    if st.button("📥 一键预取", type="primary", use_container_width=True):
-        st.write("⏳ 正在预取尾盘数据...")
+# 一键全流程按钮
+if st.button("🚀 尾盘选股扫描", type="primary", use_container_width=True):
+    # Step 1: 全市场扫描 → 信号股
+    step1 = st.empty()
+    step1.info("⏳ **Step 1/3** 全市场扫描中，寻找信号股...")
+    try:
+        result1 = run_scan()
+    except Exception as e:
+        result1 = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
+    if not result1.get("success"):
+        st.error(f"❌ 全扫描失败: {result1.get('description', '未知错误')}")
+        stderr1 = result1.get("stderr", "")
+        if stderr1:
+            with st.expander("查看错误详情"):
+                st.code(stderr1[-500:])
+    else:
+        step1.success("✅ **Step 1/3** 全扫描完成")
+        # Step 2: 预取 → 候选股详情+行情+板块
+        step2 = st.empty()
+        step2.info("⏳ **Step 2/3** 预取候选股详情+行情+板块...")
         try:
-            result = run_prefetch()
+            result2 = run_prefetch()
         except Exception as e:
-            result = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
-        if result.get("success"):
-            stdout = result.get("stdout", "")
-            if "空缓存" in stdout or "非交易" in stdout:
-                st.warning(f"⚠️ 预取完成但写入了空缓存（可能非交易时间）\n{stdout.strip()}")
+            result2 = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
+        if not result2.get("success"):
+            st.warning(f"⚠️ 预取失败: {result2.get('description', '未知错误')}，跳过继续汇总")
+        else:
+            stdout2 = result2.get("stdout", "")
+            if "空缓存" in stdout2 or "非交易" in stdout2:
+                step2.warning("⚠️ **Step 2/3** 预取完成但数据可能为空（非交易时间）")
             else:
-                st.success("✅ 尾盘预取成功")
-                time.sleep(1)
-                st.rerun()
-        else:
-            st.error(f"❌ {result.get('description', '预取失败')}")
+                step2.success("✅ **Step 2/3** 预取完成")
 
-with btn_cols[1]:
-    if st.button("📝 一键汇总", type="primary", use_container_width=True):
-        st.write("⏳ 正在生成尾盘摘要...")
+        # Step 3: 汇总 → 推荐结果
+        step3 = st.empty()
+        step3.info("⏳ **Step 3/3** 生成推荐摘要...")
         try:
-            result = run_summary()
+            result3 = run_summary()
         except Exception as e:
-            result = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
-        if result.get("success"):
-            st.success("✅ 尾盘摘要生成成功")
-            time.sleep(1)
-            st.rerun()
+            result3 = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
+        if not result3.get("success"):
+            st.error(f"❌ 汇总失败: {result3.get('description', '未知错误')}")
         else:
-            st.error(f"❌ {result.get('description', '汇总失败')}")
+            step3.success("✅ **Step 3/3** 推荐摘要生成完成")
 
-with btn_cols[2]:
-    if st.button("🔍 一键全扫描", type="primary", use_container_width=True):
-        st.write("⏳ 正在运行V10全市场扫描，请耐心等待...")
-        try:
-            result = run_scan()
-        except Exception as e:
-            result = {"success": False, "description": f"异常: {e}", "stdout": "", "stderr": str(e)}
-        if result.get("success"):
-            st.success("✅ V10全市场扫描完成")
-            st.balloons()
-            time.sleep(2)
-            st.rerun()
-        else:
-            stderr = result.get("stderr", "")
-            st.error(f"❌ {result.get('description', '扫描失败')}")
-            if stderr:
-                with st.expander("查看错误详情"):
-                    st.code(stderr[-500:])
+        # 全部完成，刷新页面
+        st.balloons()
+        time.sleep(2)
+        st.rerun()
 
 # ===================================================================
 # 7. 推荐摘要

@@ -1,9 +1,9 @@
 """数据获取模块 V10 — 完整数据源整合
 
-数据源优先级（来自V10经验）：
-- K线数据：腾讯K线（免费无限制）> akshare（VPN不稳）
+数据源优先级：
+- K线数据：新浪财经（免费稳定）> 腾讯K线（WAF封禁备用）> akshare（mini_racer不可用）
 - 实时行情：腾讯行情 qt.gtimg.cn（免费无限制）
-- 板块数据：腾讯板块ETF
+- 板块数据：东方财富板块排名
 - 资金面：iFinD HTTP API > 10jqka > 缓存
 - 基本面：iFinD HTTP API
 """
@@ -17,16 +17,17 @@ from concurrent.futures import ThreadPoolExecutor
 import os
 
 # 代理清除（VPN会拦截请求）
-for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
+for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]:
     os.environ.pop(k, None)
 os.environ.setdefault("no_proxy", "*")
 os.environ.setdefault("NO_PROXY", "*")
 
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-# 全局Session：TCP连接复用，减少TLS握手开销
+# 全局Session：TCP连接复用，减少TLS握手开销；禁用系统代理
 _session = requests.Session()
 _session.headers.update(HEADERS)
+_session.trust_env = False  # 不走系统代理
 _session.mount("https://", requests.adapters.HTTPAdapter(
     pool_connections=25, pool_maxsize=25, max_retries=0
 ))
@@ -51,7 +52,76 @@ def _set_cache(key: str, data):
     _cache[key] = (time.time(), data)
 
 
-# ===== 腾讯K线（首选）=====
+# ===== 新浪K线（首选 — 腾讯fqkline已被WAF封禁）=====
+
+def sina_klines(code: str, days: int = 250) -> pd.DataFrame:
+    """新浪日K线（前复权），免费稳定，并发友好
+    
+    API: money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData
+    - scale=240 日K, datalen=数量
+    - 返回字段: day, open, high, low, close, volume
+    - 支持 sh/sz 前缀，并发0.1s/5只
+    """
+    cache_key = f"sina_kline_{code}_{days}"
+    cached = _get_cached(cache_key)
+    if cached is not None and isinstance(cached, pd.DataFrame):
+        return cached
+
+    # 前缀映射：6/68x=sh, 0/3=sz, 北交所不支持新浪K线
+    if code.startswith("6"):
+        prefix = "sh"
+    elif code.startswith(("0", "3")):
+        prefix = "sz"
+    else:
+        # 北交所暂无新浪K线支持，返回空
+        return pd.DataFrame()
+    symbol = f"{prefix}{code}"
+
+    url = f"https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen={days}"
+
+    for attempt in range(2):
+        try:
+            timeout = 10 if attempt == 1 else 8
+            resp = _session.get(url, timeout=timeout)
+            if resp.status_code != 200 or not resp.text.strip():
+                if attempt == 0:
+                    continue
+                return pd.DataFrame()
+            data = json.loads(resp.text)
+            if not isinstance(data, list) or len(data) < 20:
+                return pd.DataFrame()
+            records = []
+            for bar in data:
+                try:
+                    records.append({
+                        "date": bar["day"],
+                        "open": float(bar["open"]),
+                        "close": float(bar["close"]),
+                        "high": float(bar["high"]),
+                        "low": float(bar["low"]),
+                        "volume": float(bar["volume"]) if bar.get("volume") else 0,
+                    })
+                except (KeyError, ValueError, TypeError):
+                    continue
+            if not records:
+                return pd.DataFrame()
+            df = pd.DataFrame(records)
+            df["date"] = pd.to_datetime(df["date"])
+            _set_cache(cache_key, df)
+            return df.copy()
+        except (requests.Timeout, requests.ConnectionError):
+            if attempt == 0:
+                continue
+            return pd.DataFrame()
+        except Exception as e:
+            if attempt == 0:
+                continue
+            print(f"[数据] 新浪K线 {code} 失败: {e}")
+            return pd.DataFrame()
+    return pd.DataFrame()
+
+
+# ===== 腾讯K线（备用 — web.ifzq.gtimg.cn 已被WAF封禁，仅做降级尝试）=====
 
 def _parse_tencent_kline_resp(text: str, symbol: str) -> pd.DataFrame | None:
     """解析腾讯K线API响应，返回DataFrame或None（含防御性类型检查）"""
@@ -158,7 +228,14 @@ def akshare_klines(code: str, days: int = 250) -> pd.DataFrame:
 
 
 def get_stock_history(code: str, days: int = 250) -> pd.DataFrame:
-    """获取K线（腾讯优先，akshare降级）"""
+    """获取K线（新浪优先，腾讯降级，akshare兜底）
+    
+    优先级变更：2026-06 腾讯 web.ifzq.gtimg.cn/fqkline 被WAF封禁返回501，
+    新浪财经K线API成为首选数据源。
+    """
+    df = sina_klines(code, days)
+    if not df.empty and len(df) >= 20:
+        return df
     df = tencent_klines(code, days)
     if not df.empty and len(df) >= 20:
         return df

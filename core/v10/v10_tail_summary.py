@@ -32,11 +32,19 @@ SIGNAL_RANK = {"全买入": 3, "强庄买": 2, "基础买": 1}
 SIGNAL_EMOJI = {"全买入": "🔴", "强庄买": "🟠", "基础买": "🟡"}
 
 # ===== 把关阈值 =====
-SCORE_RECOMMEND_MIN = 60   # 推荐最低评分
-SCORE_OBSERVE_MIN = 40     # 观察池最低评分（低于此移除）
+SCORE_RECOMMEND_MIN = 45   # 推荐最低评分（旧值60→50→45，对强庄买+数据缺失场景需宽松）
+SCORE_OBSERVE_MIN = 30     # 观察池最低评分（旧值40→35→30，基础买数据不全时容易不够）
 COOLDOWN_LOSS_STREAK = 3   # 连续全亏次数触发冷静期
 LIMIT_UP_PCT = 9.5         # 涨停阈值（%），接近此值排除
 NEAR_LIMIT_UP_PCT = 9.0    # 接近涨停阈值
+
+# 信号等级动态门槛：强信号放宽门槛，弱信号保持严格
+# 理由：全买入/强庄买本身就是强确认，评分维度扣分不应过度惩罚
+SIGNAL_SCORE_BONUS = {
+    "全买入": 15,   # 全买入额外加15分信号确认分
+    "强庄买": 10,   # 强庄买额外加10分信号确认分
+    "基础买": 0,    # 基础买不加
+}
 
 
 def log(msg):
@@ -225,6 +233,28 @@ def score_all_candidates(stocks):
             log(f"  ⚠️ {name}({code}) 评分失败: {e}")
             total, details, price, change = 0, {}, 0, 0
 
+        # 基本面扣分：被排雷但保留的强信号股，基本面维度给保底分而非0分
+        # 强信号(全买入/强庄买)基本面扣分后保底5分(而非0分)，因为强庄信号本身有价值
+        if s.get("_fundamental_penalty") and "基本面" in details:
+            old_score, max_score, old_desc = details["基本面"]
+            penalty = 5 if sig in ("全买入", "强庄买") else 0  # 强信号保底5分
+            details["基本面"] = (penalty, max_score, f"{old_desc}+排雷扣分")
+            total = total - old_score + penalty
+
+        # 资金面扣分：被排除但保留的强信号股，资金面维度给保底分
+        # 强信号资金面扣分后保底5分，主力净流出不一定代表不能买
+        if s.get("_capital_penalty") and "资金面" in details:
+            old_score, max_score, old_desc = details["资金面"]
+            penalty = 5 if sig in ("全买入", "强庄买") else 0  # 强信号保底5分
+            details["资金面"] = (penalty, max_score, f"{old_desc}+净流出扣分")
+            total = total - old_score + penalty
+
+        # 信号确认加分：强信号本身就是高置信度，额外加分避免被其他维度拖垮
+        signal_bonus = SIGNAL_SCORE_BONUS.get(sig, 0)
+        if signal_bonus > 0:
+            total += signal_bonus
+            details["信号确认"] = (signal_bonus, 0, f"{sig}信号确认+{signal_bonus}分")
+
         results.append({
             "code": code,
             "name": name,
@@ -339,20 +369,42 @@ def main():
 
     # ===== 把关2: 信号等级分流 =====
     # 全买入 + 强庄买 → 候选推荐池
-    # 基础买 → 仅观察池
+    # 基础买评分≥60的也进入推荐池（旧逻辑直接排除，导致优质基础买永远无法推荐）
     recommend_pool = [s for s in stocks if s.get("signal") in ("全买入", "强庄买")]
-    observe_pool = [s for s in stocks if s.get("signal") == "基础买"]
-    log(f"📋 信号分流: 推荐{(len(recommend_pool))}只(全买入+强庄买) + 观察{len(observe_pool)}只(基础买)")
+    base_buy_pool = [s for s in stocks if s.get("signal") == "基础买"]
+    observe_pool = []  # 基础买先不进观察池，评分后再分流
+    log(f"📋 信号分流: 推荐{(len(recommend_pool))}只(全买入+强庄买) + 基础买{len(base_buy_pool)}只(待评分分流)")
 
     # ===== 把关3: 基本面排雷 =====
     log("🔍 基本面排雷...")
     fund_passed, fund_rejected = filter_fundamental_safe(recommend_pool)
     if fund_passed is not None:
         before = len(recommend_pool)
-        recommend_pool = [s for s in recommend_pool if s.get("code", "") in fund_passed]
+        # 强信号（全买入/强庄买）被PE排雷时保留在推荐池，但在评分中扣分
+        # 理由：强庄信号本身说明主力在控盘，PE为负可能是周期反转/成长期
+        # 旧逻辑直接排除导致强庄买因PE为负永远无法推荐
+        new_recommend = []
+        for s in recommend_pool:
+            code = s.get("code", "")
+            sig = s.get("signal", "")
+            if code in fund_passed:
+                new_recommend.append(s)
+            elif sig in ("全买入", "强庄买"):
+                # 强信号被排雷 → 保留在推荐池，但标记基本面扣分
+                reason = fund_rejected.get(code, "基本面不达标")
+                log(f"  ⚠️ {s.get('name','')}({code}) {sig}基本面不达标({reason})，评分将扣分")
+                s["_fundamental_penalty"] = True  # 评分时扣基本面分
+                new_recommend.append(s)
+            # else: 基础买被排雷 → 降级到观察池
+            else:
+                reason = fund_rejected.get(code, "基本面不达标")
+                log(f"  ⬇️ {s.get('name','')}({code}) 基础买被排雷({reason})，降级到观察池")
+                observe_pool.append(s)
+        recommend_pool = new_recommend
         excluded_by_fund = before - len(recommend_pool)
-        if excluded_by_fund > 0:
-            log(f"  ❌ 基本面排雷排除 {excluded_by_fund} 只（ST/低ROE/亏损）")
+        downgraded = sum(1 for s in observe_pool if isinstance(s, dict))
+        if excluded_by_fund > 0 or downgraded > 0:
+            log(f"  结果: 通过{len(recommend_pool)}只 | 基本面扣分保留{sum(1 for s in recommend_pool if s.get('_fundamental_penalty'))}只 | 降级{downgraded}只")
         else:
             log(f"  ✅ 基本面全部通过")
     else:
@@ -364,10 +416,28 @@ def main():
     cap_passed, cap_rejected = filter_capital_safe(codes_to_check)
     if cap_passed is not None:
         before = len(recommend_pool)
-        recommend_pool = [s for s in recommend_pool if s.get("code", "") in cap_passed]
-        excluded_by_cap = before - len(recommend_pool)
-        if excluded_by_cap > 0:
-            log(f"  ❌ 资金面排除 {excluded_by_cap} 只（主力净流出）")
+        # 强信号被资金面排除时保留但扣分（和基本面排雷同理）
+        new_recommend = []
+        for s in recommend_pool:
+            code = s.get("code", "")
+            sig = s.get("signal", "")
+            if code in cap_passed:
+                new_recommend.append(s)
+            elif sig in ("全买入", "强庄买"):
+                # 强信号被资金面排除 → 保留但扣资金面分
+                reason = cap_rejected.get(code, "主力净流出")
+                log(f"  ⚠️ {s.get('name','')}({code}) {sig}资金面不达标({reason})，评分将扣分")
+                s["_capital_penalty"] = True  # 标记资金面扣分
+                new_recommend.append(s)
+            else:
+                # 基础买被资金面排除 → 降级到观察池
+                reason = cap_rejected.get(code, "主力净流出")
+                log(f"  ⬇️ {s.get('name','')}({code}) 基础买资金面不达标({reason})，降级到观察池")
+                observe_pool.append(s)
+        recommend_pool = new_recommend
+        cap_excluded = before - len(recommend_pool) + sum(1 for s in observe_pool if isinstance(s, dict))
+        if cap_excluded > 0:
+            log(f"  结果: 通过{len(recommend_pool)}只 | 资金面扣分保留{sum(1 for s in recommend_pool if s.get('_capital_penalty'))}只 | 降级{cap_excluded}只")
         else:
             log(f"  ✅ 资金面全部通过")
     else:
@@ -376,8 +446,21 @@ def main():
     # ===== 把关5: 评分 =====
     log("⏳ 正在评分...")
     scored_recommend = score_all_candidates(recommend_pool)
-    scored_observe = score_all_candidates(observe_pool) if observe_pool else []
-    log(f"✅ 评分完成: 推荐池{len(scored_recommend)}只 + 观察池{len(scored_observe)}只")
+    scored_base = score_all_candidates(base_buy_pool) if base_buy_pool else []
+    log(f"✅ 评分完成: 推荐池{len(scored_recommend)}只 + 基础买{len(scored_base)}只")
+
+    # 基础买评分分流：≥60进推荐池，40-59进观察池，<40排除
+    for s in scored_base:
+        if s["score"] >= SCORE_RECOMMEND_MIN:
+            scored_recommend.append(s)
+            log(f"  ⬆️ {s['name']}({s['code']}) 基础买评分{s['score']}≥{SCORE_RECOMMEND_MIN}，升级到推荐池")
+        elif s["score"] >= SCORE_OBSERVE_MIN:
+            observe_pool.append(s)
+        # <40的直接排除（不进任何池）
+    
+    # 推荐池按信号等级+评分排序
+    scored_recommend.sort(key=lambda x: (x["rank"], x["score"]), reverse=True)
+    log(f"📊 分流结果: 推荐池{len(scored_recommend)}只 + 观察池{len(observe_pool)}只")
 
     # ===== 把关6: 涨停价确认 + 评分门槛 =====
     log("🚫 涨停/评分筛选...")
@@ -400,15 +483,15 @@ def main():
         # 评分门槛
         if s["score"] < SCORE_RECOMMEND_MIN:
             excluded_reasons.append((s, f"评分{s['score']}<{SCORE_RECOMMEND_MIN}"))
-            # 低于观察池门槛则完全排除
+            # 低于推荐门槛但≥观察门槛的降级到观察池
             if s["score"] >= SCORE_OBSERVE_MIN:
-                scored_observe.append(s)
+                observe_pool.append(s)
             continue
 
         filtered_recommend.append(s)
 
     # 观察池也做评分门槛
-    scored_observe = [s for s in scored_observe if s["score"] >= SCORE_OBSERVE_MIN]
+    observe_pool = [s for s in observe_pool if isinstance(s, dict) and s.get("score", 0) >= SCORE_OBSERVE_MIN]
 
     log(f"  ✅ 推荐池剩余{len(filtered_recommend)}只 | 排除{len(excluded_reasons)}只")
     if excluded_reasons:
@@ -423,7 +506,7 @@ def main():
     lines.append(f"📊 **V10 尾盘信号摘要** | {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     lines.append(f"全扫描时间: {scan_time} | 原始信号: {len(stocks)}只")
     lines.append(f"把关: 信号分流→基本面排雷→资金面验证→评分→涨停确认")
-    lines.append(f"结果: 推荐{len(filtered_recommend)}只 | 观察{len(scored_observe)}只 | 排除{len(excluded_reasons)}只")
+    lines.append(f"结果: 推荐{len(filtered_recommend)}只 | 观察{len(observe_pool)}只 | 排除{len(excluded_reasons)}只")
     lines.append("")
 
     # ===== 冷静期提示 =====
@@ -447,8 +530,8 @@ def main():
         lines.append("")
 
     # ===== 观察池 =====
-    if scored_observe:
-        format_others_table(lines, scored_observe, label="👁️ 观察池（基础买/低分候选）")
+    if observe_pool:
+        format_others_table(lines, observe_pool, label="👁️ 观察池（基础买/低分候选）")
 
     # ===== 被过滤详情 =====
     if excluded_reasons:
@@ -462,7 +545,7 @@ def main():
         lines.append("")
 
     # 无信号兜底
-    if not filtered_recommend and not scored_observe and not excluded_reasons:
+    if not filtered_recommend and not observe_pool and not excluded_reasons:
         lines.append("⛔ 今日尾盘无V10进场信号")
         lines.append("   继续保持空仓等待")
 
@@ -477,6 +560,9 @@ def main():
         f.write(output)
     log(f"\n💾 摘要已写入 {summary_cache}")
 
+    # ===== 输出结构化推荐JSON，供页面读取 =====
+    _build_recommend_json(filtered_recommend, observe_pool, excluded_reasons, scan_time, in_cooldown)
+
     # ===== 自动同步推荐到追踪器 =====
     _top_n = min(2, len(filtered_recommend)) if not in_cooldown and filtered_recommend else 0
     if _top_n > 0:
@@ -484,6 +570,87 @@ def main():
             _sync_to_tracker(filtered_recommend[:_top_n], date_str=scan_time[:10] if scan_time[:4].isdigit() else datetime.now().strftime("%Y-%m-%d"))
         except Exception as e:
             log(f"⚠️ 同步追踪器失败: {e}")
+
+
+def _build_recommend_json(recommend, observe, excluded, scan_time, cooldown=False):
+    """输出结构化推荐JSON，供页面读取进场建议"""
+    # 动态止损/目标价计算
+    def _calc_levels(stock):
+        price = stock.get("price", 0) or 0
+        sig = stock.get("signal", "基础买")
+        if price <= 0:
+            return {}
+        if sig == "全买入":
+            stop_pct, target_pct, pos = 0.08, 0.15, "25%"
+        elif sig == "强庄买":
+            stop_pct, target_pct, pos = 0.10, 0.12, "20%"
+        else:
+            stop_pct, target_pct, pos = 0.14, 0.08, "10%"
+        stop_loss = round(price * (1 - stop_pct), 2)
+        target = round(price * (1 + target_pct), 2)
+        risk_reward = (target - price) / (price - stop_loss) if (price - stop_loss) > 0 else 0
+        return {
+            "entry_price": price,
+            "stop_loss": stop_loss,
+            "stop_pct": f"-{stop_pct*100:.0f}%",
+            "target": target,
+            "target_pct": f"+{target_pct*100:.0f}%",
+            "position": pos,
+            "risk_reward": f"{risk_reward:.1f}:1",
+        }
+
+    def _stock_entry(stock, action, reason=""):
+        sig = stock.get("signal", "基础买")
+        levels = _calc_levels(stock)
+        return {
+            "code": stock.get("code", ""),
+            "name": stock.get("name", ""),
+            "signal": sig,
+            "signal_emoji": SIGNAL_EMOJI.get(sig, "⚪"),
+            "score": stock.get("score", 0),
+            "price": stock.get("price", 0),
+            "change_pct": stock.get("change_pct", 0),
+            "action": action,  # "推荐进场" / "观察" / "不建议"
+            "reason": reason,
+            **levels,
+        }
+
+    rec_list = []
+    for s in recommend:
+        reason = "综合评分达标，信号确认度高"
+        if s.get("_fundamental_penalty"):
+            reason += "（基本面扣分保留）"
+        if s.get("_capital_penalty"):
+            reason += "（资金面扣分保留）"
+        rec_list.append(_stock_entry(s, "推荐进场", reason))
+
+    obs_list = []
+    for s in observe:
+        if isinstance(s, dict):
+            obs_list.append(_stock_entry(s, "观察", "评分未达推荐门槛或基础买信号"))
+
+    exc_list = []
+    for s, reason in excluded:
+        exc_list.append(_stock_entry(s, "不建议", reason))
+
+    result = {
+        "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "scan_time": scan_time,
+        "recommend": rec_list,
+        "observe": obs_list,
+        "excluded": exc_list,
+        "summary": {
+            "recommend_count": len(rec_list),
+            "observe_count": len(obs_list),
+            "excluded_count": len(exc_list),
+            "in_cooldown": cooldown,
+        },
+    }
+
+    json_path = os.path.join(CACHE_DIR, "v10_tail_recommend.json")
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    log(f"📊 推荐JSON已写入 {json_path} (推荐{len(rec_list)} 观察{len(obs_list)} 排除{len(exc_list)})")
 
 
 def _sync_to_tracker(recommendations, date_str=None):

@@ -30,6 +30,7 @@ WATCHLIST_PATH = os.path.join(CACHE_DIR, "v10_watchlist.json")
 PREFETCH_PATH = os.path.join(CACHE_DIR, "v10_tail_prefetch.json")
 SUMMARY_PATH = os.path.join(CACHE_DIR, "v10_tail_summary.txt")
 TRACKER_PATH = os.path.join(CACHE_DIR, "tail_rec_tracker.json")
+RECOMMEND_PATH = os.path.join(CACHE_DIR, "v10_tail_recommend.json")
 
 # V10脚本路径
 PREFETCH_SCRIPT = os.path.join(PROJECT_DIR, "core", "v10", "v10_tail_prefetch.py")
@@ -126,6 +127,33 @@ def get_summary() -> str:
         str: 摘要文本，文件不存在返回空字符串
     """
     return _safe_read_text(SUMMARY_PATH, default="")
+
+
+def get_recommend() -> dict:
+    """
+    读取v10_tail_recommend.json，返回结构化推荐数据。
+    
+    Returns:
+        {
+            "update_time": str,
+            "scan_time": str,
+            "recommend": [{code, name, signal, action, entry_price, stop_loss, ...}],
+            "observe": [...],
+            "excluded": [...],
+            "summary": {...},
+        }
+    """
+    raw = _safe_read_json(RECOMMEND_PATH, default=None)
+    if raw is None:
+        return {
+            "update_time": "",
+            "scan_time": "",
+            "recommend": [],
+            "observe": [],
+            "excluded": [],
+            "summary": {"recommend_count": 0, "observe_count": 0, "excluded_count": 0, "in_cooldown": False},
+        }
+    return raw
 
 
 def get_tracker() -> list:
@@ -361,6 +389,7 @@ def get_dashboard_data() -> dict:
             "watchlist": {...},
             "prefetch": {...},
             "summary": str,
+            "recommend": dict,
             "tracker": list,
             "indices": list,
             "freshness": {...},  # 各文件时效性
@@ -369,6 +398,7 @@ def get_dashboard_data() -> dict:
     watchlist = get_watchlist()
     prefetch = get_prefetch()
     summary = get_summary()
+    recommend = get_recommend()
     tracker = get_tracker()
     indices = get_index_data()
 
@@ -384,6 +414,7 @@ def get_dashboard_data() -> dict:
         "watchlist": watchlist,
         "prefetch": prefetch,
         "summary": summary,
+        "recommend": recommend,
         "tracker": tracker,
         "indices": indices,
         "freshness": freshness,

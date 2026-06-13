@@ -149,23 +149,30 @@ def score_stock(code, name, signal_level, key_levels=None, capital_flow=None, fu
     elif cap > 0:
         c_score = 10
         c_desc = f"主力净流入+{cap:.0f}万"
+    elif cap == 0:
+        # cap=0可能是数据缺失（缓存不存在/接口返回默认值），给半分
+        c_score = 7.5
+        c_desc = "资金面数据缺失(给半分)"
     else:
         c_score = 0
         c_desc = f"主力净流出{cap:.0f}万"
     details["资金面"] = (c_score, 20, c_desc)
 
-    # 4. 振幅分位 (15分)
+    # 4. 振幅分位 (15分) - 尾盘选股活跃股振幅偏高是正常特征，适当放宽
     amp_pct = get_amplitude_percentile(code)
     if amp_pct is not None:
-        if amp_pct < 40:
+        if amp_pct < 30:
             a_score = 15
             a_desc = f"{amp_pct:.0f}%低位"
         elif amp_pct <= 60:
-            a_score = 7.5
+            a_score = 10
             a_desc = f"{amp_pct:.0f}%中位"
+        elif amp_pct <= 80:
+            a_score = 5
+            a_desc = f"{amp_pct:.0f}%偏高"
         else:
             a_score = 0
-            a_desc = f"{amp_pct:.0f}%高位"
+            a_desc = f"{amp_pct:.0f}%极高"
     else:
         a_score = 7.5
         a_desc = "数据缺失(给半分)"
@@ -181,16 +188,34 @@ def score_stock(code, name, signal_level, key_levels=None, capital_flow=None, fu
     details["板块风口"] = (w_score, 10, w_desc)
     total += w_score
 
-    # 6. 追高风险 (10分) - 涨幅<3%满分
-    if abs(change_pct) < 3:
-        r_score = 10
-        r_desc = f"涨幅{change_pct:+.1f}%安全"
-    elif abs(change_pct) <= 5:
-        r_score = 5
-        r_desc = f"涨幅{change_pct:+.1f}%适中"
+    # 6. 追高风险 (10分) - 分段扣分，强庄信号天然涨幅偏高需宽容
+    # 旧逻辑：>5%直接0分，对强庄信号不公平（强庄买涨5%+是正常特征）
+    # 新逻辑：结合信号等级动态调整容忍度
+    if signal_level in ("全买入", "强庄买"):
+        # 强信号天然涨幅高，给予更宽容的评分
+        if abs(change_pct) < 5:
+            r_score = 10
+            r_desc = f"涨幅{change_pct:+.1f}%安全(强信号)"
+        elif abs(change_pct) <= 7:
+            r_score = 5
+            r_desc = f"涨幅{change_pct:+.1f}%偏高(强信号宽容)"
+        elif abs(change_pct) <= 9:
+            r_score = 2
+            r_desc = f"涨幅{change_pct:+.1f}%较高(强信号)"
+        else:
+            r_score = 0
+            r_desc = f"涨幅{change_pct:+.1f}%追高风险"
     else:
-        r_score = 0
-        r_desc = f"涨幅{change_pct:+.1f}%追高"
+        # 基础买保持原逻辑
+        if abs(change_pct) < 3:
+            r_score = 10
+            r_desc = f"涨幅{change_pct:+.1f}%安全"
+        elif abs(change_pct) <= 5:
+            r_score = 5
+            r_desc = f"涨幅{change_pct:+.1f}%适中"
+        else:
+            r_score = 0
+            r_desc = f"涨幅{change_pct:+.1f}%追高"
     details["追高风险"] = (r_score, 10, r_desc)
     total += r_score
 

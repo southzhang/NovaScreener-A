@@ -125,6 +125,32 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
         if not rec:
             return
 
+        # ---- 进场建议标签 ----
+        action = rec.action
+        level = rec.level
+        if "强烈" in action or "强烈推荐" in level:
+            action_bg = "#ff4b4b"
+        elif "建议买入" in action or "值得关注" in level:
+            action_bg = "#ffab40"
+        elif "观察" in action or "观察等待" in level:
+            action_bg = "#b39700"
+        else:
+            action_bg = "#888888"
+        rr_color = "#00c853" if rec.risk_reward >= 2.0 else "#ffab40" if rec.risk_reward >= 1.5 else "#ff4b4b"
+
+        st.html(f"""
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:4px;">
+            <div style="display:flex; gap:8px; align-items:center;">
+                <span style="background:{action_bg}; color:#fff; padding:3px 12px; border-radius:4px; font-size:0.9em; font-weight:700;">{action}</span>
+                <span style="color:var(--text-secondary); font-size:0.85em;">{rec.hold_days}</span>
+            </div>
+            <div style="display:flex; gap:12px; align-items:center; font-size:0.85em;">
+                <span style="color:var(--text-secondary);">盈亏比 <b style="color:{rr_color};">{rec.risk_reward}:1</b></span>
+                <span style="color:var(--text-secondary);">仓位 <b style="color:var(--text-primary);">{rec.position_pct}%</b></span>
+            </div>
+        </div>
+        """)
+
         # ---- 紧凑评分条 ----
         dim_parts = []
         for d in rec.dimensions:
@@ -299,6 +325,31 @@ def _render_results(results):
                     _extra_parts.append("<span style='color:#ef4444;'>已涨停</span>")
             _extra_html = " · ".join(_extra_parts) if _extra_parts else ""
 
+            # 进场建议标签（基于推荐引擎的level和action）
+            _level_color_map = {
+                "强烈推荐": "#ff4b4b",
+                "值得关注": "#ffab40",
+                "观察等待": "#ffeb3b",
+                "暂不推荐": "#888888",
+            }
+            _level_bg = "#888888"
+            _level_text = "⚪ 暂不推荐"
+            # 从_render_recommendation的rec里取level不太方便，直接用score和signal_type判断
+            _total_score = r.get("score", 0)
+            _signal_type = signal_type
+            if _total_score >= 80 or (_signal_type == "全买入" and _total_score >= 60):
+                _level_text = "🔴 可进场"
+                _level_bg = "#ff4b4b"
+            elif _total_score >= 60 or (_signal_type == "强庄买" and _total_score >= 50):
+                _level_text = "🟠 建议买入"
+                _level_bg = "#ffab40"
+            elif _total_score >= 40:
+                _level_text = "🟡 观察等回调"
+                _level_bg = "#b39700"
+            else:
+                _level_text = "⚪ 暂不建议"
+                _level_bg = "#888888"
+
             st.html(f"""
             <div class="scan-result-card" style="border-left:4px solid {border_color};">
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
@@ -312,6 +363,7 @@ def _render_results(results):
                         <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
                     </div>
                     <div style="display:flex; gap:10px; align-items:center;">
+                        <span style="background:{_level_bg}; color:#fff; padding:2px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">{_level_text}</span>
                         <span class="tag tag-accent">{signal_type}</span>
                         <span style="color:#ff6b35; font-weight:700;">{r['score']}分</span>
                         <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
