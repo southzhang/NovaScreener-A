@@ -441,6 +441,8 @@ def run_auction_scan(progress_callback=None) -> dict:
     """
     t0 = time.time()
     v10_codes = set()
+    v10_recommend_codes = set()   # V10推荐进场的票
+    v10_observe_codes = set()     # V10观察池的票
 
     # 尝试读取V10信号
     for path in [
@@ -457,6 +459,23 @@ def run_auction_scan(progress_callback=None) -> dict:
                         v10_codes.add(code)
             except Exception:
                 pass
+
+    # 尝试读取V10推荐结果（交叉验证用）
+    rec_path = os.path.expanduser('~/.hermes/cache/v10_tail_recommend.json')
+    if os.path.exists(rec_path):
+        try:
+            with open(rec_path) as f:
+                rec_data = json.load(f)
+            for s in rec_data.get('recommend', []):
+                code = re.sub(r'\D', '', s.get('code', ''))
+                if code:
+                    v10_recommend_codes.add(code)
+            for s in rec_data.get('observe', []):
+                code = re.sub(r'\D', '', s.get('code', ''))
+                if code:
+                    v10_observe_codes.add(code)
+        except Exception:
+            pass
 
     # 1. 腾讯全量行情
     if progress_callback:
@@ -620,6 +639,17 @@ def run_auction_scan(progress_callback=None) -> dict:
         action, action_reason = _classify_action(
             total, sp, so, sv, ss, code in v10_codes
         )
+
+        # V10交叉验证：如果V10推荐结果是"观察"（非"推荐进场"），
+        # 竞价的"可进场"应降级为"观察"，避免两个模块结论矛盾
+        if action == "可进场" and code in v10_observe_codes and code not in v10_recommend_codes:
+            action = "观察"
+            action_reason = "V10评分未达推荐门槛 · " + action_reason + " · 降级为观察"
+        
+        # V10推荐进场的票，观察升级为"可进场（V10确认）"
+        if action == "观察" and code in v10_recommend_codes:
+            action = "可进场"
+            action_reason = "V10推荐进场+竞价信号确认 · " + action_reason
 
         stock = AuctionStock(
             code=code, name=s['name'],
