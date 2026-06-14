@@ -73,14 +73,16 @@ V10 六维评分 + 趋势评分 + 波段评分：
 |------|------|
 | 🔍 **选股扫描** | 选择策略 → 运行扫描 → 查看V10信号结果 |
 | ⚡ **竞价选股** | 09:25竞价数据 → 短线策略筛选 |
+| 🌅 **尾盘选股** | 14:30尾盘信号扫描 → 6层把关筛选 |
+| 📉 **推荐追踪** | 推荐股票追踪验证 |
 | ⭐ **自选股** | 管理自选股、查看K线、技术指标 |
 | 👁️ **盯盘监控** | 启动/停止后台扫描监控 |
 | 💼 **持仓管理** | 添加持仓 → 获取操作建议 |
 | 🏆 **V10评分** | 六维评分排序 + 雷达图 |
 | 🔄 **波段回调** | 趋势波段策略信号 + K线回看 |
+| 📊 **策略回测** | 回测策略历史表现 |
 | ⚙️ **策略配置** | 编辑V10参数、策略组合 |
 | 🔔 **预警设置** | 飞书 webhook 配置 |
-| 📊 **策略回测** | 回测策略历史表现 |
 
 ---
 
@@ -89,7 +91,7 @@ V10 六维评分 + 趋势评分 + 波段评分：
 | 组件 | 选型 |
 |------|------|
 | 语言 | Python 3.10+ |
-| 数据源 | 腾讯K线 / 实时行情（免费） |
+| 数据源 | 新浪财经K线 + 腾讯实时行情（免费） |
 | Web 框架 | Streamlit |
 | 图表 | plotly（K线、技术指标） |
 | 通知 | 飞书 webhook |
@@ -104,6 +106,7 @@ V10 六维评分 + 趋势评分 + 波段评分：
 ```
 quant-watchdog/
 ├── app.py              # Streamlit 主入口
+├── version.py          # 版本管理 + GitHub 更新检查
 ├── server.py           # 后端API服务
 ├── launcher.py         # macOS 启动器
 ├── config.yaml         # 策略参数配置
@@ -112,7 +115,7 @@ quant-watchdog/
 │   ├── v10_core.py     # V10 高性能核心函数（EMA/HHV/LLV O(n) 实现）
 │   ├── strategies.py   # 选股策略引擎（V10全量 + 均线/MACD/量价等）
 │   ├── scorer.py       # V10 六维评分系统
-│   ├── data.py         # 腾讯API数据获取 + 缓存
+│   ├── data.py         # 新浪K线 + 腾讯实时行情（免费）
 │   ├── scanner.py      # 全市场并行扫描器
 │   ├── auction.py      # 竞价选股引擎（09:25）
 │   ├── trend_swing.py  # 趋势波段策略
@@ -122,18 +125,39 @@ quant-watchdog/
 │   ├── alerts.py       # 飞书预警通知
 │   ├── monitor.py      # 盯盘后台监控
 │   ├── db.py           # SQLite 数据库操作
-│   └── ui.py           # Streamlit UI 组件（主题、样式）
+│   ├── ui.py           # Streamlit UI 组件（主题、样式）
+│   └── v10/            # V10 子模块（尾盘、基本面、资金流等）
+│       ├── v10_tail_prefetch.py    # 尾盘信号预取
+│       ├── v10_tail_summary.py     # 尾盘汇总
+│       ├── v10_fundamental_filter.py  # 基本面过滤
+│       ├── v10_capital_filter.py   # 资金流过滤
+│       ├── v10_scorer.py           # V10评分
+│       ├── v10_realtime_scan.py    # 实时扫描
+│       ├── v10_intraday_monitor.py # 盘中监控
+│       ├── v10_signal_stats.py     # 信号统计
+│       ├── v10_auto_trade.py       # 自动交易接口
+│       ├── feishu_push.py          # 飞书推送
+│       ├── tail_rec_tracker.py     # 推荐追踪
+│       ├── sector_analysis.py      # 板块分析
+│       ├── tech_analysis.py        # 技术分析
+│       ├── swing_pullback.py       # 波段回调
+│       ├── swing_trailing_stop.py  # 波段跟踪止损
+│       ├── data_service.py         # 数据服务
+│       ├── ifind_http_api.py       # iFinD HTTP API
+│       └── quick_v10_report.py     # 快速V10报告
 └── pages/              # Streamlit 多页面
     ├── 1_🔍_选股扫描.py
     ├── 2_⚡_竞价选股.py
-    ├── 3_⭐_自选股.py
-    ├── 4_👁️_盯盘监控.py
-    ├── 5_💼_持仓管理.py
-    ├── 6_🏆_V10评分.py
-    ├── 7_🔄_波段回调.py
-    ├── 8_⚙️_策略配置.py
-    ├── 9_🔔_预警设置.py
-    └── 10_📊_策略回测.py
+    ├── 3_🌅_尾盘选股.py
+    ├── 4_📉_推荐追踪.py
+    ├── 5_⭐_自选股.py
+    ├── 6_👁️_盯盘监控.py
+    ├── 7_💼_持仓管理.py
+    ├── 8_🏆_V10评分.py
+    ├── 9_🔄_波段回调.py
+    ├── 10_📊_策略回测.py
+    ├── 11_⚙️_策略配置.py
+    └── 12_🔔_预警设置.py
 ```
 
 ---
@@ -178,8 +202,10 @@ bash build_mac.sh
 
 ## ⚠️ 注意事项
 
-- 腾讯免费数据源盘中延迟约 3-5 秒
-- akshare 接口有频率限制，已做请求缓存
+- K线数据源已从腾讯fqkline切换到新浪财经（腾讯WAF已封禁，新浪稳定免费）
+- 北交所股票暂无新浪K线支持，会自动跳过
+- 腾讯实时行情（qt.gtimg.cn）免费无限制，盘中延迟约 3-5 秒
+- akshare 因 mini_racer 依赖在 macOS 上崩溃，已降级为备用
 - 飞书 webhook 需要用户自行创建
 - 本软件**不构成投资建议**，仅供学习研究参考
 
