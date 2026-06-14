@@ -137,6 +137,8 @@ def _fetch_tencent_batch(codes: list) -> dict:
                 vol_ratio = round(amount / max(circ_cap * 12.5 / 10000, 1), 1) if circ_cap > 0 else 0
                 # 竞价成交量(手)和买一卖一挂单
                 auction_vol = float(parts[6]) if parts[6] else 0  # 成交量(手)
+                high_52w = float(parts[41]) if len(parts) > 41 and parts[41] else 0  # 年内最高
+                low_52w = float(parts[42]) if len(parts) > 42 and parts[42] else 0   # 年内最低
                 results[code] = {
                     'code': code, 'name': name, 'price': price,
                     'prev_close': prev_close, 'open': open_p,
@@ -145,6 +147,7 @@ def _fetch_tencent_batch(codes: list) -> dict:
                     'turnover': turnover, 'high': high, 'low': low,
                     'change_pct': change_pct, 'vol_ratio': vol_ratio,
                     'circulation': circ_cap,
+                    'high_52w': high_52w, 'low_52w': low_52w,
                 }
             except (ValueError, IndexError):
                 continue
@@ -264,26 +267,33 @@ def get_stock_sector(code: str) -> Optional[str]:
 
 # ===== 竞价4维评分 =====
 
-def _score_position(position_20d: float, has_data: bool = True) -> tuple:
-    """位置评分(0-25分)
-    低位启动(近20日跌或横盘): 25分 — 竞价最安全的位置
-    中位(近20日涨0-15%): 15分 — 可以但需谨慎
-    高位(近20日涨15%+): 0分 — 高位加速最危险
+def _score_position_52w(price: float, high_52w: float, low_52w: float) -> tuple:
+    """位置评分(0-25分) — 基于年内高低价
+    用年内位置百分位判断：价格在年内高低价的什么位置
     
-    无数据时: 12分(中间偏保守) + 标记缺失
+    低位(0-30%): 25分 — 年内低位区间，安全边际高
+    中低位(30-50%): 20分 — 年内中低位，尚可
+    中高位(50-70%): 12分 — 年内中高位，需谨慎
+    高位(70-85%): 5分 — 年内高位，追高风险大
+    极高位(85-100%): 0分 — 年内极高位，追高极险
+    
+    无数据时: 12分(保守中间分) + 标记缺失
     """
-    if not has_data:
+    if high_52w <= 0 or low_52w <= 0 or price <= 0 or high_52w <= low_52w:
         return 12, "位置未知(数据缺失)"
-    if position_20d <= 0:
-        return 25, f"低位启动({position_20d:+.1f}%)"
-    elif position_20d <= 5:
-        return 22, f"低位偏强({position_20d:+.1f}%)"
-    elif position_20d <= 10:
-        return 15, f"中位({position_20d:+.1f}%)"
-    elif position_20d <= 15:
-        return 8, f"中位偏高({position_20d:+.1f}%)"
+    
+    position_pct = (price - low_52w) / (high_52w - low_52w) * 100
+    
+    if position_pct <= 30:
+        return 25, f"年内低位({position_pct:.0f}%)"
+    elif position_pct <= 50:
+        return 20, f"年内中低({position_pct:.0f}%)"
+    elif position_pct <= 70:
+        return 12, f"年内中高({position_pct:.0f}%)"
+    elif position_pct <= 85:
+        return 5, f"年内高位({position_pct:.0f}%)"
     else:
-        return 0, f"高位风险({position_20d:+.1f}%)"
+        return 0, f"年内极高({position_pct:.0f}%)"
 
 
 def _score_open_pct(change_pct: float) -> tuple:
@@ -547,7 +557,31 @@ def run_auction_scan(progress_callback=None) -> dict:
     sector_map = {}  # code -> sector
     sector_auction_count = {}  # sector -> 异动数量
 
-    # 批量获取板块
+    # 板块映射缓存：本地缓存1天，避免每次都请求东方财富API
+    sector_cache_path = os.path.expanduser('~/.hermes/cache/sector_map.json')
+    sector_cache = {}
+    sector_cache_fresh = False
+    if os.path.exists(sector_cache_path):
+        try:
+            with open(sector_cache_path) as f:
+                cache_data = json.load(f)
+            cache_time = cache_data.get('_time', 0)
+            from datetime import datetime as _dt
+            # 缓存有效期：当天（跨日失效）
+            if _dt.now().strftime('%Y%m%d') == _dt.fromtimestamp(cache_time).strftime('%Y%m%d'):
+                sector_cache = cache_data.get('map', {})
+                sector_cache_fresh = True
+        except Exception:
+            pass
+
+    # 从缓存中取板块
+    for code in candidate_codes:
+        if code in sector_cache:
+            sector_map[code] = sector_cache[code]
+
+    # 缓存未命中才请求API
+    missing_codes = [c for c in candidate_codes if c not in sector_map]
+
     def _get_sector_batch(code_list):
         result = {}
         for code in code_list:
@@ -557,10 +591,22 @@ def run_auction_scan(progress_callback=None) -> dict:
         return result
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        chunks = [candidate_codes[i:i+20] for i in range(0, len(candidate_codes), 20)]
-        sector_futures = [executor.submit(_get_sector_batch, chunk) for chunk in chunks]
-        for f in as_completed(sector_futures):
-            sector_map.update(f.result())
+        # 只请求缓存未命中的板块
+        if missing_codes:
+            chunks = [missing_codes[i:i+20] for i in range(0, len(missing_codes), 20)]
+            sector_futures = [executor.submit(_get_sector_batch, chunk) for chunk in chunks]
+            for f in as_completed(sector_futures):
+                sector_map.update(f.result())
+
+    # 保存板块缓存
+    if missing_codes:
+        try:
+            os.makedirs(os.path.dirname(sector_cache_path), exist_ok=True)
+            sector_cache.update(sector_map)
+            with open(sector_cache_path, 'w', encoding='utf-8') as f:
+                json.dump({'_time': time.time(), 'map': sector_cache}, f, ensure_ascii=False)
+        except Exception:
+            pass
 
     # 统计同板块异动数量
     for code, sec in sector_map.items():
@@ -649,7 +695,30 @@ def run_auction_scan(progress_callback=None) -> dict:
             missing.append("板块数据缺失")
 
         # 4维评分
-        sp, sp_desc = _score_position(pos_20d, has_data=has_pos_data)
+        # 位置评分：优先用腾讯行情的年内高低价（零额外请求），回退到新浪K线的20日涨幅
+        high_52w = s.get('high_52w', 0)
+        low_52w = s.get('low_52w', 0)
+        if high_52w > 0 and low_52w > 0 and s['price'] > 0 and high_52w > low_52w:
+            sp, sp_desc = _score_position_52w(s['price'], high_52w, low_52w)
+            if "位置数据缺失" in missing:
+                missing.remove("位置数据缺失")
+        elif has_pos_data:
+            # 回退到20日涨幅
+            pos_val = position_cache.get(code, 0)
+            if pos_val != 0:
+                # 20日涨幅反向映射：跌/横盘=低位，涨=高位
+                if pos_val <= 0:
+                    sp, sp_desc = 25, f"低位启动({pos_val:+.1f}%)"
+                elif pos_val <= 5:
+                    sp, sp_desc = 20, f"低位偏强({pos_val:+.1f}%)"
+                elif pos_val <= 10:
+                    sp, sp_desc = 12, f"中位({pos_val:+.1f}%)"
+                else:
+                    sp, sp_desc = 5, f"高位({pos_val:+.1f}%)"
+            else:
+                sp, sp_desc = 12, "位置未知(数据缺失)"
+        else:
+            sp, sp_desc = 12, "位置未知(数据缺失)"
         so, so_desc = _score_open_pct(s['change_pct'])
         sv, sv_desc = _score_auction_volume(s['amount_wan'], near_avg)
         ss, ss_desc = _score_sector(sec, sec_hot, sec_change, sec_auction_n)
