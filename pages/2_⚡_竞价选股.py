@@ -123,6 +123,7 @@ def _render_auction_card(s: AuctionStock):
             {'<span>📌V10交叉</span>' if s.in_v10 else ''}
         </div>
         <div style="font-size:0.82em; color:#ff6b35; margin-top:4px;">{action_hint}</div>
+        {'<div style="font-size:0.78em; color:#ef5350; margin-top:2px;">⚠️ ' + ' · '.join(s.missing_data) + '</div>' if s.missing_data else ''}
     </div>
     """)
 
@@ -242,6 +243,7 @@ if st.session_state.get("auction_scanned"):
                         <span style="color:var(--text-secondary);">流通 <b style="color:var(--text-primary);">{s.circulation:.0f}亿</b></span>
                     </div>
                     <div style="color:#ff6b35; font-size:0.85em;">⏰ {s.action_reason}</div>
+                    {'<div style="color:#ef5350; font-size:0.8em; margin-top:2px;">⚠️ 数据不完整: ' + ' · '.join(s.missing_data) + '</div>' if s.missing_data else ''}
                 </div>
                 """)
 

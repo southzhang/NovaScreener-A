@@ -64,6 +64,9 @@ class AuctionStock:
     desc_volume: str = ""       # 量能描述
     desc_sector: str = ""       # 板块描述
 
+    # 数据缺失标记（用于UI提示）
+    missing_data: list = field(default_factory=list)  # 如 ["位置数据缺失", "板块数据缺失"]
+
     # 兼容旧字段
     strategy: str = ""          # 保留用于飞书推送
     vibe_score: int = 0
@@ -261,12 +264,16 @@ def get_stock_sector(code: str) -> Optional[str]:
 
 # ===== 竞价4维评分 =====
 
-def _score_position(position_20d: float) -> tuple:
+def _score_position(position_20d: float, has_data: bool = True) -> tuple:
     """位置评分(0-25分)
     低位启动(近20日跌或横盘): 25分 — 竞价最安全的位置
     中位(近20日涨0-15%): 15分 — 可以但需谨慎
     高位(近20日涨15%+): 0分 — 高位加速最危险
+    
+    无数据时: 12分(中间偏保守) + 标记缺失
     """
+    if not has_data:
+        return 12, "位置未知(数据缺失)"
     if position_20d <= 0:
         return 25, f"低位启动({position_20d:+.1f}%)"
     elif position_20d <= 5:
@@ -334,7 +341,12 @@ def _score_sector(sector: str, sector_hot: bool, sector_change: float,
                   sector_auction_count: int) -> tuple:
     """板块共振评分(0-25分)
     同板块多只竞价异动 + 板块涨幅 = 共振强
+    
+    无板块数据时: 8分(保守) + 标记缺失
     """
+    if not sector:
+        return 8, "板块未知(数据缺失)"
+
     score = 0
     parts = []
 
@@ -554,33 +566,54 @@ def run_auction_scan(progress_callback=None) -> dict:
     for code, sec in sector_map.items():
         sector_auction_count[sec] = sector_auction_count.get(sec, 0) + 1
 
-    # 并发获取位置(20日涨幅)和近期均量
+    # 并发获取位置(20日涨幅)和近期均量（不限80只，全部候选都取）
     position_cache = {}
     avg_amount_cache = {}
+    # 追踪数据获取失败
+    position_failed = set()
+    avg_failed = set()
 
     def _fetch_position(code):
-        pos = _fetch_position_20d(code)
-        return code, pos
+        try:
+            pos = _fetch_position_20d(code)
+            return code, pos, pos != 0 or True  # 0可能是真实数据
+        except Exception:
+            return code, 0, False
 
     def _fetch_avg(code):
-        avg = _fetch_recent_avg_amount(code, 5)
-        return code, avg
+        try:
+            avg = _fetch_recent_avg_amount(code, 5)
+            return code, avg, avg > 0  # avg=0意味着数据缺失
+        except Exception:
+            return code, 0, False
 
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        pos_futures = {executor.submit(_fetch_position, c): c for c in candidate_codes[:80]}
-        avg_futures = {executor.submit(_fetch_avg, c): c for c in candidate_codes[:80]}
+    # 限制并发量避免API限流，分批处理
+    MAX_POSITION_FETCH = 150  # 最多取150只的位置数据
+    MAX_AVG_FETCH = 150
+    fetch_codes_pos = candidate_codes[:MAX_POSITION_FETCH]
+    fetch_codes_avg = candidate_codes[:MAX_AVG_FETCH]
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        pos_futures = {executor.submit(_fetch_position, c): c for c in fetch_codes_pos}
+        avg_futures = {executor.submit(_fetch_avg, c): c for c in fetch_codes_avg}
         for f in as_completed(pos_futures):
             try:
-                code, pos = f.result()
+                code, pos, ok = f.result()
                 position_cache[code] = pos
+                if not ok:
+                    position_failed.add(code)
             except Exception:
-                pass
+                code = pos_futures[f]
+                position_failed.add(code)
         for f in as_completed(avg_futures):
             try:
-                code, avg = f.result()
+                code, avg, ok = f.result()
                 avg_amount_cache[code] = avg
+                if not ok:
+                    avg_failed.add(code)
             except Exception:
-                pass
+                code = avg_futures[f]
+                avg_failed.add(code)
 
     # 6. 竞价4维评分
     if progress_callback:
@@ -603,9 +636,20 @@ def run_auction_scan(progress_callback=None) -> dict:
         # 获取位置和量能
         pos_20d = position_cache.get(code, 0)
         near_avg = avg_amount_cache.get(code, 0)
+        has_pos_data = code in position_cache and code not in position_failed
+        has_avg_data = code in avg_amount_cache and code not in avg_failed
+
+        # 数据缺失追踪
+        missing = []
+        if code not in position_cache:
+            missing.append("位置数据缺失")
+        if code not in avg_amount_cache or code in avg_failed:
+            missing.append("均量数据缺失")
+        if not sec:
+            missing.append("板块数据缺失")
 
         # 4维评分
-        sp, sp_desc = _score_position(pos_20d)
+        sp, sp_desc = _score_position(pos_20d, has_data=has_pos_data)
         so, so_desc = _score_open_pct(s['change_pct'])
         sv, sv_desc = _score_auction_volume(s['amount_wan'], near_avg)
         ss, ss_desc = _score_sector(sec, sec_hot, sec_change, sec_auction_n)
@@ -669,6 +713,7 @@ def run_auction_scan(progress_callback=None) -> dict:
             score_position=sp, score_open=so, score_volume=sv, score_sector=ss,
             total_score=total, action=action, action_reason=action_reason,
             desc_position=sp_desc, desc_open=so_desc, desc_volume=sv_desc, desc_sector=ss_desc,
+            missing_data=missing,
             strategy=strategy, vibe_score=vibe, vibe_tags=vtags,
         )
         results.append(stock)
