@@ -245,6 +245,40 @@ if st.session_state.get("auction_scanned"):
                 </div>
                 """)
 
+        # ===== 📌 V10交叉印证（优先展示）=====
+        v10_stocks = [s for s in stocks if s.in_v10]
+        if v10_stocks:
+            st.html(f'<h2>📌 V10交叉印证 · {len(v10_stocks)}只</h2>')
+            st.caption("以下股票同时命中V10信号和竞价异动，信号确认度更高")
+            for s in v10_stocks:
+                chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-primary)"
+                if s.action == "可进场":
+                    action_html = '<span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">✅ 可进场</span>'
+                elif s.action == "观察":
+                    action_html = '<span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">👁️ 观察</span>'
+                else:
+                    action_html = ""
+
+                st.html(f"""
+                <div class="scan-result-card" style="border-left:4px solid #42a5f5;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                        <div>
+                            <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{s.name}</span>
+                            <span style="color:var(--text-secondary); margin-left:8px;">{s.code}</span>
+                            <span class="tag tag-accent" style="margin-left:8px;">V10+竞价</span>
+                            {action_html}
+                        </div>
+                        <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
+                            <span style="color:{chg_color}; font-weight:600;">{s.change_pct:+.2f}%</span>
+                            <span style="color:var(--text-secondary);">量比 <span style="color:var(--text-primary); font-weight:600;">{s.vol_ratio:.1f}</span></span>
+                            <span style="color:var(--text-secondary);">成交 <span style="color:var(--text-primary); font-weight:600;">{s.amount_wan/10000:.1f}亿</span></span>
+                            <span style="color:#ff6b35; font-weight:600;">{s.total_score:.0f}分</span>
+                        </div>
+                    </div>
+                </div>
+                """)
+                _render_auction_card(s)
+
         # ===== 👁️ 观察 =====
         if watch_list:
             st.html(f'<h2>👁️ 观察 · 等15分钟看走势 · {len(watch_list)}只</h2>')
@@ -274,42 +308,6 @@ if st.session_state.get("auction_scanned"):
                         f'量比{s.vol_ratio:.1f} {s.total_score:.0f}分 — {s.action_reason}'
                         f'</div>'
                     )
-
-        # ===== V10交叉重点（仅展示有V10信号的）=====
-        v10_stocks = [s for s in stocks if s.in_v10]
-        if v10_stocks:
-            st.divider()
-            st.html(f'<h2>📌 V10交叉印证 · {len(v10_stocks)}只</h2>')
-            st.caption("以下股票同时命中V10信号和竞价异动，信号确认度更高")
-            for s in v10_stocks:
-                chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-primary)"
-                # 进场标签
-                if s.action == "可进场":
-                    action_html = '<span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">✅ 可进场</span>'
-                elif s.action == "观察":
-                    action_html = '<span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">👁️ 观察</span>'
-                else:
-                    action_html = ""
-
-                st.html(f"""
-                <div class="scan-result-card" style="border-left:4px solid #42a5f5;">
-                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                        <div>
-                            <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{s.code}</span>
-                            <span style="color:var(--text-secondary); margin-left:8px;">{s.name}</span>
-                            <span class="tag tag-accent" style="margin-left:8px;">V10+竞价</span>
-                            {action_html}
-                        </div>
-                        <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
-                            <span style="color:{chg_color}; font-weight:600;">{s.change_pct:+.2f}%</span>
-                            <span style="color:var(--text-secondary);">量比 <span style="color:var(--text-primary); font-weight:600;">{s.vol_ratio:.1f}</span></span>
-                            <span style="color:var(--text-secondary);">成交 <span style="color:var(--text-primary); font-weight:600;">{s.amount_wan/10000:.1f}亿</span></span>
-                            <span style="color:#ff6b35; font-weight:600;">{s.total_score:.0f}分</span>
-                        </div>
-                    </div>
-                </div>
-                """)
-                _render_auction_card(s)
 
         # ===== 全部结果明细（折叠）=====
         all_stocks = [s for s in stocks if s.action != "放弃"]
