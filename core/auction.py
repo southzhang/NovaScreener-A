@@ -526,8 +526,8 @@ def run_auction_scan(progress_callback=None) -> dict:
         return result
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        sector_futures = {executor.submit(_get_sector_batch, [c]): c
-                         for c in [candidate_codes[i:i+20] for i in range(0, len(candidate_codes), 20)]}
+        chunks = [candidate_codes[i:i+20] for i in range(0, len(candidate_codes), 20)]
+        sector_futures = [executor.submit(_get_sector_batch, chunk) for chunk in chunks]
         for f in as_completed(sector_futures):
             sector_map.update(f.result())
 
