@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 V10 盘中盯盘监控器 v2
-数据源：腾讯实时行情（延迟2-3秒）
+数据源：quote_adapter统一接口（QMT/腾讯自动切换）
 观察池：~/.hermes/cache/v10_watchlist.json（每日盘前V10扫描生成）
 
 入场条件（满足任一即触发）：
@@ -17,14 +17,13 @@ V10 盘中盯盘监控器 v2
 
 import json
 import sys
-import time
 import os
-import urllib.request
 from datetime import datetime
 
 # 添加scripts目录到路径
 sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 from sector_analysis import get_sector_ranking, analyze_sector_rotation, get_sector_summary
+from quote_adapter import get_quotes, get_source_name
 
 WATCHLIST_PATH = os.path.expanduser('~/.hermes/cache/v10_watchlist.json')
 ALERT_STATE_PATH = os.path.expanduser('~/.hermes/cache/v10_monitor_alerted.json')
@@ -41,7 +40,10 @@ def verify_market_open():
 
 
 def verify_watchlist_freshness(data):
-    """验证观察池是否是当天且未过期的"""
+    """验证观察池是否是当天且未过期的
+    返回: (is_fresh, message)
+    is_fresh=False 但仍可降级使用（不再直接跳过），主流程根据返回值决定标记
+    """
     scan_time = data.get('scan_time', '')
     if not scan_time:
         return False, '观察池无时间戳'
@@ -49,12 +51,16 @@ def verify_watchlist_freshness(data):
     if today not in scan_time:
         return False, f'观察池过期（生成于{scan_time}）'
     
-    # ⏰ 分钟级时效：超过30分钟的watchlist视为过期（全扫描15分钟一轮，30分钟足够新）
+    # ⏰ 分钟级时效：超过30分钟的watchlist标记为过期但仍可降级使用
+    # 全扫描15分钟一轮，30分钟内数据较新；30-120分钟降级使用加⚠️；超120分钟不使用
     try:
         st = datetime.strptime(scan_time[:16], '%Y-%m-%d %H:%M')
         age_min = (datetime.now() - st).total_seconds() / 60
+        if age_min > 120:
+            return False, f'观察池严重过期{int(age_min)}分钟（{scan_time[:16]}），不可使用'
         if age_min > 30:
-            return False, f'观察池{int(age_min)}分钟前过期（{scan_time[:16]}）'
+            # 降级：可用但标记为过期
+            return True, f'⚠️观察池{int(age_min)}分钟前（{scan_time[:16]}），降级使用'
     except ValueError:
         pass
     
@@ -63,7 +69,7 @@ def verify_watchlist_freshness(data):
 
 def verify_quote_freshness(quote):
     """验证行情数据是否是当前交易日的"""
-    # 腾讯API在非交易时段返回昨收数据
+    # 非交易时段数据源可能返回昨收数据
     # 如果价格=昨收 且 开盘=0，说明是停牌或非交易时段
     if quote['open'] == 0 and quote['price'] == quote['yclose']:
         return False, '可能停牌或非交易时段'
@@ -101,174 +107,47 @@ def save_alerted(alerted):
 
 
 def fetch_realtime_quotes(codes):
-    """批量获取实时行情（腾讯API，延迟2-3秒）"""
-    qt_codes = []
-    for code in codes:
-        # 6xx=沪市, 0xx/3xx(创业板)=深市
-        prefix = 'sh' if code.startswith('6') else 'sz'
-        qt_codes.append(f'{prefix}{code}')
-
-    batch_size = 40
+    """批量获取实时行情（通过quote_adapter统一接口，纯腾讯API）"""
+    raw = get_quotes(codes)
     results = {}
-    errors = []
-    for i in range(0, len(qt_codes), batch_size):
-        batch = qt_codes[i:i+batch_size]
-        url = f"https://qt.gtimg.cn/q={','.join(batch)}"
-        try:
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            resp = urllib.request.urlopen(req, timeout=10)
-            raw = resp.read().decode('gbk')
-            for line in raw.strip().split(';'):
-                if '=' not in line or '~' not in line:
-                    continue
-                parts = line.split('=')[1].strip('"').split('~')
-                if len(parts) < 50:
-                    continue
-                code = parts[2]
-                try:
-                    results[code] = {
-                        'name': parts[1],
-                        'price': float(parts[3]) if parts[3] else 0,
-                        'yclose': float(parts[4]) if parts[4] else 0,
-                        'open': float(parts[5]) if parts[5] else 0,
-                        'high': float(parts[33]) if parts[33] else 0,
-                        'low': float(parts[34]) if parts[34] else 0,
-                        'change_pct': float(parts[32]) if parts[32] else 0,
-                        'volume': float(parts[36]) if parts[36] else 0,        # 成交量(手)
-                        'amount': float(parts[37]) if parts[37] else 0,  # 腾讯API单位：万元
-                        'turnover': float(parts[38]) if parts[38] else 0,
-                    }
-                except (ValueError, IndexError):
-                    pass
-        except Exception as e:
-            errors.append(f'批次{i//batch_size}: {e}')
-        time.sleep(0.1)
+    for code, q in raw.items():
+        # quote_adapter字段映射到monitor内部格式
+        price = q.get('lastPrice', 0) or q.get('price', 0)
+        prev_close = q.get('prevClose', 0) or q.get('yclose', 0)
+        change_pct = q.get('change_pct', 0)
+        if not change_pct and prev_close > 0 and price > 0:
+            change_pct = round((price - prev_close) / prev_close * 100, 2)
 
-    if errors:
-        print(f"⚠️ 行情获取异常: {'; '.join(errors)}", file=sys.stderr)
+        amount = q.get('amount', 0)
+        # QMT返回amount单位为元，需转为万元；腾讯返回万元
+        source = q.get('source', '')
+        if source.startswith('qmt') and amount > 0:
+            amount = amount / 10000
+
+        results[code] = {
+            'name': q.get('name', ''),
+            'price': price,
+            'yclose': prev_close,
+            'open': q.get('open', 0),
+            'high': q.get('high', 0),
+            'low': q.get('low', 0),
+            'change_pct': change_pct,
+            'volume': q.get('volume', 0),
+            'amount': amount,
+            'turnover': q.get('turnover', 0),
+            'upper_limit': q.get('limit_up', 0),
+            'lower_limit': q.get('limit_down', 0),
+            'outer_vol': q.get('outer_vol', 0),
+            'inner_vol': q.get('inner_vol', 0),
+            'pe_ttm': q.get('pe_ttm', 0),
+            'amplitude': q.get('amplitude', 0),
+            'circ_cap': q.get('circ_cap', 0),
+            'total_cap': q.get('total_cap', 0),
+            'vol_ratio': q.get('vol_ratio', 0),
+            'source': source,
+        }
     return results
 
-
-# ====== iFinD数据增强 ======
-
-def _load_ifind_token():
-    """从环境变量或.env加载iFinD HTTP API token"""
-    token = os.environ.get("IFIND_REFRESH_TOKEN", "")
-    if token:
-        return token
-    env_path = os.path.expanduser("~/.hermes/.env")
-    try:
-        with open(env_path) as f:
-            for line in f:
-                if line.startswith("IFIND_REFRESH_TOKEN="):
-                    return line.split("=", 1)[1].strip()
-    except FileNotFoundError:
-        pass
-    return ""
-
-
-def _ifind_get_access_token(refresh_token):
-    """用refresh_token换取access_token"""
-
-    url = "https://quantapi.51ifind.com/api/v1/get_access_token"
-    data = json.dumps({}).encode()
-    req = urllib.request.Request(url, data=data, headers={
-        "Content-Type": "application/json",
-        "refresh_token": refresh_token
-    })
-    try:
-        resp = urllib.request.urlopen(req, timeout=10)
-        result = json.loads(resp.read())
-        if 'data' in result and 'access_token' in result['data']:
-            return result['data']['access_token']
-    except Exception:
-        pass
-    return None
-
-
-def fetch_ifind_realtime(codes):
-    """批量获取iFinD实时行情（PB等精细指标）"""
-    refresh_token = _load_ifind_token()
-    if not refresh_token:
-        return {}
-
-    access_token = _ifind_get_access_token(refresh_token)
-    if not access_token:
-        return {}
-
-    # iFinD代码格式: 300065.SZ, 600936.SH
-    ifind_codes = []
-    for code in codes:
-        suffix = '.SH' if code.startswith('6') else '.SZ'
-        ifind_codes.append(f"{code}{suffix}")
-
-    results = {}
-    batch_size = 50
-    for i in range(0, len(ifind_codes), batch_size):
-        batch = ifind_codes[i:i+batch_size]
-        payload = json.dumps({
-            "codes": ",".join(batch),
-            "indicators": "latest,changeRatio,pb,pe_ttm,totalMarketValue,circulationMarketValue,turnoverRate,volumeRatio"
-        }).encode()
-        req = urllib.request.Request(
-            "https://quantapi.51ifind.com/api/v1/real_time_quotation",
-            data=payload,
-            headers={
-                "Content-Type": "application/json",
-                "access_token": access_token
-            }
-        )
-        try:
-            resp = urllib.request.urlopen(req, timeout=15)
-            data = json.loads(resp.read())
-            if data.get('errorcode') == 0 and data.get('tables'):
-                for item in data['tables']:
-                    thscode = item.get('thscode', '')
-                    code = thscode.split('.')[0]
-                    tbl = item.get('table', {})
-                    results[code] = {
-                        'pb': tbl.get('pb', [None])[0] if isinstance(tbl.get('pb'), list) else tbl.get('pb'),
-                        'pe_ttm': tbl.get('pe_ttm', [None])[0] if isinstance(tbl.get('pe_ttm'), list) else tbl.get('pe_ttm'),
-                        'total_mv': tbl.get('totalMarketValue', [None])[0] if isinstance(tbl.get('totalMarketValue'), list) else tbl.get('totalMarketValue'),
-                        'circ_mv': tbl.get('circulationMarketValue', [None])[0] if isinstance(tbl.get('circulationMarketValue'), list) else tbl.get('circulationMarketValue'),
-                        'turnover_rate': tbl.get('turnoverRate', [None])[0] if isinstance(tbl.get('turnoverRate'), list) else tbl.get('turnoverRate'),
-                        'volume_ratio': tbl.get('volumeRatio', [None])[0] if isinstance(tbl.get('volumeRatio'), list) else tbl.get('volumeRatio'),
-                    }
-        except Exception:
-            pass
-        time.sleep(0.1)
-
-    return results
-
-
-def format_ifind_enhanced(stock, quote, ifind_data):
-    """用iFinD数据增强入场信号报告"""
-    code = stock['code']
-    data = ifind_data.get(code)
-    if not data:
-        return ''
-
-    parts = []
-    pb = data.get('pb')
-    if pb and pb > 0:
-        parts.append(f'PB:{pb:.2f}')
-    pe = data.get('pe_ttm')
-    if pe and pe > 0:
-        parts.append(f'PE(TTM):{pe:.1f}')
-    vr = data.get('volume_ratio')
-    if vr and vr > 0:
-        parts.append(f'量比:{vr:.2f}')
-    tr = data.get('turnover_rate')
-    if tr and tr > 0:
-        parts.append(f'换手:{tr:.1f}%')
-    total_mv = data.get('total_mv')
-    if total_mv and total_mv > 0:
-        mv_yi = total_mv / 100000000
-        parts.append(f'市值:{mv_yi:.1f}亿')
-
-    if parts:
-        return f'   📊 iFinD: {" | ".join(parts)}'
-    return ''
 
 # ====== 信号判断 ======
 
@@ -313,19 +192,115 @@ def judge_entry(stock, quote):
     if ema20 > 0 and price < ema20 * 0.98:
         return 'risk', f'🔴 跌破EMA20 ¥{ema20:.2f}（现价{price:.2f}）', 2
 
-    # 追高警告（创业板15%、ST股4%、其他7%）
+    # 追高警告（06-10升级：Vibe感知版）
+    # 新规则：Vibe≥+2强时追高豁免（强趋势票不因涨多了就标risk）
     code = stock['code']
     name = stock.get('name', '')
+    vibe_tags = stock.get('vibe_tags', '')
+    signal = stock.get('signal', '')
+    # 判断是否强趋势票：Vibe≥+2 且 信号为全买入/强庄买
+    is_strong_trend = False
+    # 优先读vibe_score整数字段（V10扫描已保存），回退从vibe_tags提取
+    vibe_score_val = stock.get('vibe_score', 0)
+    if not isinstance(vibe_score_val, (int, float)) or vibe_score_val == 0:
+        # 回退：从vibe_tags列表中计算（BOS多头+2, ChoCH多头+2, FVG+N取N, 其余+1）
+        if isinstance(vibe_tags, list):
+            for tag in vibe_tags:
+                tag_s = str(tag).strip()
+                if tag_s.startswith('BOS'):
+                    vibe_score_val += 2
+                elif tag_s.startswith('ChoCH'):
+                    vibe_score_val += 2
+                elif tag_s.startswith('FVG'):
+                    import re as _re
+                    _m = _re.search(r'([+-]?\d+)', tag_s)
+                    if _m:
+                        vibe_score_val += int(_m.group(1))
+                elif tag_s in ('K线看多', '缠论二买', '缠论三买'):
+                    vibe_score_val += 1
+        elif isinstance(vibe_tags, str) and vibe_tags.strip():
+            import re as _re
+            _m = _re.match(r'([+-]?\d+)', vibe_tags.strip())
+            if _m:
+                vibe_score_val = int(_m.group(1))
+    if vibe_score_val >= 2 and signal in ('全买入', '强庄买'):
+        is_strong_trend = True
+    # 涨停一票否决线（不变）
+    price_limit_pct = 20.0 if code.startswith('3') else 10.0
+    hard_limit_pct = price_limit_pct * 0.95  # 创业板19% / 主板9.5%
     if code.startswith('3'):
         chase_limit = 15
     elif 'ST' in name.upper():
         chase_limit = 4
     else:
         chase_limit = 7
+    if abs(change_pct) >= hard_limit_pct:
+        return 'risk', f'⛔ 接近涨停{change_pct:+.1f}%（限制{price_limit_pct:.0f}%），一票否决', 3
     if change_pct > chase_limit:
-        return 'risk', f'⚠️ 今日已涨{change_pct:.1f}%，追高风险大（阈值{chase_limit}%）', 1
+        if is_strong_trend:
+            # Vibe≥+2强 + 强信号：追高豁免，降级为观察+提醒
+            return 'watch', f'⚡ 涨{change_pct:.1f}%超阈值但Vibe≥+2强趋势，追高豁免', 0
+        else:
+            return 'risk', f'⚠️ 今日已涨{change_pct:.1f}%，追高风险大（阈值{chase_limit}%）', 1
 
     # ====== 入场信号检查 ======
+
+    # 仓位控制检查（铁律：单票≤20%，两票≤30%）
+    try:
+        import sys, os
+        sys.path.insert(0, os.path.expanduser('~/.hermes/scripts'))
+        from current_holdings import get_holdings, get_portfolio_value, get_cash
+        _holdings = get_holdings()
+        _pv = get_portfolio_value()
+        _cash = get_cash()
+        _current_positions = len(_holdings)
+        _total_position_pct = sum(h['shares'] * h['cost'] for h in _holdings) / _pv * 100 if _pv > 0 else 0
+        # 检查是否还能买入
+        _buy_amount = price * 100  # 最小1手100股
+        _new_position_pct = _buy_amount / _pv * 100
+        if _current_positions >= 2:
+            return 'skip', f'⛔ 已有{_current_positions}只持仓，仓位上限（两票≤30%），不可再加仓', 0
+        if _current_positions == 1 and _total_position_pct + _new_position_pct > 30:
+            return 'skip', f'⛔ 加仓后总仓位将超30%（当前{_total_position_pct:.1f}%+新{_new_position_pct:.1f}%）', 0
+        if _new_position_pct > 20:
+            return 'skip', f'⛔ 单票仓位将超20%（{_new_position_pct:.1f}%）', 0
+        if _cash < _buy_amount:
+            return 'skip', f'⛔ 现金不足（¥{_cash:.0f} < 1手¥{_buy_amount:.0f}）', 0
+    except Exception:
+        pass  # 读取持仓失败不阻塞，但继续后续检查
+
+    # 冷静期检查（连亏3次冷静2天）
+    try:
+        import json as _json
+        _tracker_path = os.path.expanduser('~/.hermes/cache/tail_rec_tracker.json')
+        if os.path.exists(_tracker_path):
+            with open(_tracker_path) as _f:
+                _tracker = _json.load(_f)
+            _streak_loss = _tracker.get('streak_loss', 0)
+            _cooldown = _tracker.get('cooldown_until', '')
+            if _cooldown:
+                from datetime import datetime as _dt
+                try:
+                    _cd_time = _dt.strptime(_cooldown, '%Y-%m-%d')
+                    if _dt.now() < _cd_time:
+                        return 'skip', f'🧊 冷静期中（连亏{_streak_loss}次，至{_cooldown}），暂停推荐', 0
+                except ValueError:
+                    pass
+            if _streak_loss >= 3:
+                return 'skip', f'🧊 连亏{_streak_loss}次，触发冷静期', 0
+    except Exception:
+        pass
+
+    # 止损空间检查（七关第⑦关：止损空间≥5%）
+    if stop_loss > 0:
+        stop_loss_pct = (price - stop_loss) / price * 100
+        if stop_loss_pct < 5:
+            return 'skip', f'⛔ 止损空间仅{stop_loss_pct:.1f}%（¥{price:.2f}→止损¥{stop_loss:.2f}），不足5%不可入场', 0
+    elif ema20 > 0:
+        # 无明确止损位时用EMA20作为参考止损
+        ema_stop_pct = (price - ema20) / price * 100
+        if ema_stop_pct < 5:
+            return 'skip', f'⛔ 距EMA20仅{ema_stop_pct:.1f}%（¥{price:.2f}→EMA20¥{ema20:.2f}），止损空间不足5%', 0
 
     # 信号1：回踩支撑（现价接近EMA7或EMA20，且未破EMA20）
     if ema7 > 0 and ema20 > 0:
@@ -358,17 +333,28 @@ def format_report(stock, quote, action, reason, level):
 
     signal_tag = stock.get('signal', '')
     vibe = stock.get('vibe_tags', '')
+    vibe_score_val = stock.get('vibe_score', 0)
+    # 盘中版Vibe来自tech_analysis（SMC+缠论+K线形态），无[竞价版]标注
     vibe_str = f' Vibe:{vibe}' if vibe and vibe != '-' else ''
+    if vibe_score_val != 0:
+        vibe_str = f' Vibe{"+" if vibe_score_val > 0 else ""}{vibe_score_val}({vibe})' if vibe else vibe_str
 
     note = stock.get('note', '')
     note_str = f'\n   💡 {note}' if note else ''
+
+    # 涨停/跌停信息
+    upper = quote.get('upper_limit', 0)
+    lower = quote.get('lower_limit', 0)
+    limit_str = ''
+    if upper > 0 and lower > 0:
+        limit_str = f' | 涨停¥{upper:.2f}/跌停¥{lower:.2f}'
 
     return (
         f"{emoji} **{stock['name']}**({stock['code']}) {reason}\n"
         f"   信号:{signal_tag}{vibe_str}\n"
         f"   现价:¥{quote['price']:.2f} | 涨跌:{quote['change_pct']:+.1f}% | "
         f"振幅:{((quote['high']-quote['low'])/quote['yclose']*100) if quote['yclose']>0 else 0:.1f}% | "
-        f"成交:{quote['amount']:.0f}万"
+        f"成交:{quote['amount']:.0f}万{limit_str}"
         f"{note_str}"
     )
 
@@ -390,11 +376,12 @@ def main():
         print(f"[{time_str}] 观察池为空，跳过盯盘")
         return
 
-    # [检查3] 观察池时效
+    # [检查3] 观察池时效（降级机制：30-120分钟降级使用，>120分钟才跳过）
     fresh, msg = verify_watchlist_freshness(wl_data)
     if not fresh:
-        print(f"[{time_str}] ⚠️ {msg}，跳过盯盘（请先运行V10扫描）")
+        print(f"[{time_str}] ❌ {msg}，跳过盯盘")
         return
+    is_stale = '⚠️' in msg  # 降级使用标记
 
     stocks = wl_data['stocks']
     scan_time = wl_data.get('scan_time', '未知')
@@ -435,12 +422,6 @@ def main():
     buy_signals.sort(key=lambda x: -x[1])
     risk_signals.sort(key=lambda x: -x[1])
 
-    # [iFinD增强] 对入场信号股获取iFinD精细数据
-    ifind_data = {}
-    if buy_signals:
-        all_codes = [s['code'] for s in stocks]
-        ifind_data = fetch_ifind_realtime(all_codes)
-
     # 生成报告
     lines = []
     # 计算观察池数据距今时间
@@ -459,7 +440,9 @@ def main():
             age_text = f'(❌过期{age_min}分钟)'
     except:
         pass
-    lines.append(f"📡 **V10盘中监控** {date_str} {time_str[:5]}")
+    source_name = get_source_name()
+    stale_marker = ' ⚠️降级数据' if is_stale else ''
+    lines.append(f"📡 **V10盘中监控** {date_str} {time_str[:5]} | 数据源:{source_name}{stale_marker}")
     lines.append(f"观察池:{len(stocks)}只 | 扫描于:{scan_time[:16]} {age_text}")
     lines.append('')
     
@@ -482,7 +465,10 @@ def main():
             q = quotes.get(s['code'])
             if q and q['price'] > 0:
                 chg = q['change_pct']
-                lines.append(f"  {s['name']}({s['code']}) ¥{q['price']:.2f} {chg:+.1f}% | 成交{q['amount']:.0f}万")
+                ul = q.get('upper_limit', 0)
+                ll = q.get('lower_limit', 0)
+                lim = f' 涨停¥{ul:.2f}/跌停¥{ll:.2f}' if ul > 0 and ll > 0 else ''
+                lines.append(f"  {s['name']}({s['code']}) ¥{q['price']:.2f} {chg:+.1f}% | 成交{q['amount']:.0f}万{lim}")
             else:
                 lines.append(f"  {s['name']}({s['code']}) ¥{s.get('price',0):.2f}")
         lines.append('')
@@ -493,7 +479,10 @@ def main():
             q = quotes.get(s['code'])
             if q and q['price'] > 0:
                 chg = q['change_pct']
-                lines.append(f"  {s['name']}({s['code']}) ¥{q['price']:.2f} {chg:+.1f}% | 成交{q['amount']:.0f}万")
+                ul = q.get('upper_limit', 0)
+                ll = q.get('lower_limit', 0)
+                lim = f' 涨停¥{ul:.2f}/跌停¥{ll:.2f}' if ul > 0 and ll > 0 else ''
+                lines.append(f"  {s['name']}({s['code']}) ¥{q['price']:.2f} {chg:+.1f}% | 成交{q['amount']:.0f}万{lim}")
         if len(strong_buy_stocks) > 10:
             lines.append(f"  ...及{len(strong_buy_stocks)-10}只")
         lines.append('')
@@ -505,14 +494,6 @@ def main():
         stock_map = {s['code']: s for s in stocks}
         for r, level in buy_signals:
             lines.append(r)
-            # 从报告字符串中提取code，添加iFinD增强
-            for code, s in stock_map.items():
-                if f'({code})' in r:
-                    quote = quotes.get(code, {})
-                    enhanced = format_ifind_enhanced(s, quote, ifind_data)
-                    if enhanced:
-                        lines.append(enhanced)
-                    break
         lines.append('')
 
         # [买入推荐小结] 综合评估可入场标的
@@ -570,10 +551,15 @@ def main():
                     elif 1.5 < change_pct < 7:
                         reasons.append('温和上涨')
 
-                    # 最终评级
+                    # 最终评级 + 止损位
+                    levels = s.get('key_levels', {})
+                    stop_loss = levels.get('stop_loss', 0)
                     rating = f'{stars} {s["name"]}({code}) ¥{price:.2f}'
                     if reasons:
                         rating += f' — {"|".join(reasons)}'
+                    if stop_loss > 0:
+                        stop_pct = (price - stop_loss) / price * 100
+                        rating += f' | 止损¥{stop_loss:.2f}({stop_pct:.1f}%)'
 
                     pick_lines.append(rating)
                     break

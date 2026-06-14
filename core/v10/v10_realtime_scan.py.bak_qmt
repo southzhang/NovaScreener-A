@@ -31,26 +31,16 @@ if now.hour == 9 and now.minute < 30:
     print(f"⏳ 集合竞价中({now.strftime('%H:%M')})，跳过扫描，等9:30开盘")
     sys.exit(0)
 
-# 14:55之后停止扫描，保留尾盘时段数据（14:50那轮仍可捕捉尾盘信号）
-if now.hour > 14 or (now.hour == 14 and now.minute >= 55):
-    print(f"⏳ 14:55后跳过扫描，保留尾盘时段数据")
+# 14:45之后停止扫描，保留尾盘时段最后两轮（14:30/14:45）为尾盘链路更新watchlist
+if now.hour > 14 or (now.hour == 14 and now.minute >= 45):
+    print(f"⏳ 14:45后跳过扫描，保留尾盘时段数据")
     sys.exit(0)
 
 sys.path.insert(0, '/Users/southzhang/.hermes/workspace')
 sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 from v10_core import ema_fast, hhv_fast, llv_fast, barslast_fast
 from tech_analysis import vibe_score as _vibe_score_fn
-
-# 数据源：纯腾讯API（QMT已禁用 v3.1）
-try:
-    from quote_adapter import (
-        get_full_market_quotes, get_kline, get_batch_klines,
-        get_source_name, force_refresh,
-        is_qmt_ssh_available, is_qmt_http_available,
-    )
-    _HAS_QUOTE_ADAPTER = True
-except ImportError:
-    _HAS_QUOTE_ADAPTER = False
+from sector_analysis import get_sector_ranking, analyze_sector_rotation, get_sector_summary, get_sector_score
 
 # iFinD HTTP API (分钟K线 + 基本面)
 IFIND_BASE_URL = "https://quantapi.51ifind.com/api/v1"
@@ -148,7 +138,7 @@ def fetch_minute_klines_today(code):
 
     data = _ifind_post("high_frequency", {
         "codes": ifind_code,
-        "indicators": "open,high,low,close,volume",
+        "indicators": "open,high,low,close,volume,amount",
         "starttime": start_time,
         "endtime": end_time
     }, timeout=15)
@@ -329,7 +319,7 @@ def intraday_confirmation(v10_result, intraday):
 # ====== Step 1: 全市场实时行情 ======
 
 def _parse_tencent_realtime(raw):
-    """解析腾讯行情原始文本（只提取V10扫描实际使用的字段）"""
+    """解析腾讯行情原始文本"""
     result = []
     for line in raw.strip().split(';'):
         if '=' not in line or '~' not in line:
@@ -350,12 +340,25 @@ def _parse_tencent_realtime(raw):
         change = float(parts[32]) if parts[32] else 0
         volume = float(parts[6]) if parts[6] else 0
         amount = float(parts[37]) if parts[37] else 0
+        outer_vol = float(parts[7]) if len(parts) > 7 and parts[7] else 0   # 外盘(手)
+        inner_vol = float(parts[8]) if len(parts) > 8 and parts[8] else 0   # 内盘(手)
+        turnover = float(parts[38]) if len(parts) > 38 and parts[38] else 0  # 换手率%
+        pe_ttm = float(parts[39]) if len(parts) > 39 and parts[39] else 0   # PE(TTM)
+        amplitude = float(parts[44]) if len(parts) > 44 and parts[44] else 0 # 振幅%
+        circ_cap = float(parts[45]) if len(parts) > 45 and parts[45] else 0 # 流通市值(亿)
+        total_cap = float(parts[46]) if len(parts) > 46 and parts[46] else 0 # 总市值(亿)
+        vol_ratio = float(parts[49]) if len(parts) > 49 and parts[49] else 0 # 量比
         result.append({
             'code': code, 'name': name,
+            'symbol': f"{'sh' if code.startswith('6') else 'sz'}{code}",
             'price': price, 'yclose': yclose, 'open': open_p,
             'high': high, 'low': low, 'change': change,
             'volume': volume * 100, 'amount': amount,
             'limit_up': limit_up, 'limit_down': limit_down,
+            'outer_vol': outer_vol, 'inner_vol': inner_vol,
+            'turnover': turnover, 'pe_ttm': pe_ttm,
+            'amplitude': amplitude, 'circ_cap': circ_cap,
+            'total_cap': total_cap, 'vol_ratio': vol_ratio,
         })
     return result
 
@@ -464,16 +467,9 @@ def _safe_float(val, default=0):
 
 
 def fetch_all_realtime():
-    """全市场A股实时行情
-    优先级：腾讯串行获取(稳定可靠) → 腾讯并发降级(快但易限流) → QMT兜底
-    
-    2026-06-11修复：腾讯8线程并发在盘中高峰易被限流，返回<100只，
-    误触发QMT降级。QMT /full_market基于日K线，非交易时段amount=0，
-    经_filter_stocks后只剩6-15只，导致全天扫描数据无效。
-    恢复腾讯串行获取（已稳定运行数月），增加重试机制。
-    """
+    """全市场A股实时行情（腾讯首选，快速免费无限制）"""
     t_start = time.time()
-    
+    result = []
     tc_codes = []
     for i in range(600000, 606000):
         tc_codes.append(f"sh{i:06d}")
@@ -484,248 +480,406 @@ def fetch_all_realtime():
     # 688科创板不添加（用户无权限）
 
     batch_size = 80
-    result = []
-    
-    # ====== 腾讯串行获取（稳定可靠，已运行数月） ======
     for i in range(0, len(tc_codes), batch_size):
         batch = tc_codes[i:i+batch_size]
         qs = ",".join(batch)
         url = f"https://qt.gtimg.cn/q={qs}"
-        for retry in range(3):  # 最多重试3次
-            try:
-                resp = urllib.request.urlopen(url, timeout=15)
-                raw = resp.read().decode('gbk', errors='ignore')
-                result.extend(_parse_tencent_realtime(raw))
-                break
-            except Exception as e:
-                if retry < 2:
-                    time.sleep(0.5 * (retry + 1))  # 退避重试
-                elif i % 2000 == 0:
-                    log(f"  ⚠️ 腾讯批次异常: {e}")
+        try:
+            resp = urllib.request.urlopen(url, timeout=10)
+            raw = resp.read().decode('gbk', errors='ignore')
+            result.extend(_parse_tencent_realtime(raw))
+        except Exception as e:
+            if i % 2000 == 0:
+                log(f"  ⚠️ 腾讯批次异常: {e}")
         if i % 2000 == 0 and i > 0:
             log(f"  行情进度: {i}/{len(tc_codes)} 已获取{len(result)}只")
-    
-    if len(result) > 100:
-        result = _filter_stocks(result)
-        t_end = time.time()
-        log(f"  ✅ 腾讯获取{len(result)}只有效股票 ({t_end-t_start:.1f}秒)")
-        return result
-    
-    # ====== 腾讯并发降级（串行获取不足时尝试） ======
-    if len(result) <= 100:
-        log(f"  ⚠️ 腾讯串行仅获取{len(result)}只，尝试并发降级...")
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        
-        tc_result2 = []
-        def _fetch_tc_batch(batch_codes):
-            qs = ",".join(batch_codes)
-            url = f"https://qt.gtimg.cn/q={qs}"
-            try:
-                resp = urllib.request.urlopen(url, timeout=10)
-                raw = resp.read().decode('gbk', errors='ignore')
-                return _parse_tencent_realtime(raw)
-            except Exception:
-                return []
-        
-        with ThreadPoolExecutor(max_workers=4) as executor:  # 降到4线程减少限流风险
-            futures = []
-            for i in range(0, len(tc_codes), batch_size):
-                batch = tc_codes[i:i+batch_size]
-                futures.append(executor.submit(_fetch_tc_batch, batch))
-            for future in as_completed(futures):
-                tc_result2.extend(future.result())
-        
-        if len(tc_result2) > 100:
-            tc_result2 = _filter_stocks(tc_result2)
-            t_end = time.time()
-            log(f"  ✅ 腾讯并发降级获取{len(tc_result2)}只有效股票 ({t_end-t_start:.1f}秒)")
-            return tc_result2
-    
-    # ====== QMT兜底已禁用（06-12）======
-    # QMT full_market返回日K数据非盘中实时，用作行情源等于用过期数据推荐
-    # 腾讯失败时宁可报错不用QMT糊弄，实盘用过期数据是严重风险
-    # if _HAS_QUOTE_ADAPTER:
-    #     log("  ⚠️ 腾讯行情均不足，降级QMT...")
-    #     ... (原QMT兜底代码已注释，见git历史)
-
-    # 腾讯行情获取失败，直接报错不降级
-    result = _filter_stocks(result)
     t_end = time.time()
-    log(f"  ⚠️ 腾讯仅获取{len(result)}只有效股票 ({t_end-t_start:.1f}秒)")
+    result = _filter_stocks(result)
+    log(f"  ✅ 腾讯获取{len(result)}只有效股票 ({t_end-t_start:.1f}秒)")
     if len(result) < 100:
-        log(f"⛔ 严重警告: 腾讯行情仅获取{len(result)}只（正常应>3000），QMT日K数据不可用作实时行情，本次扫描结果不可靠！")
+        log(f"⚠️ 警告: 仅获取{len(result)}只股票（正常应>3000），API可能故障")
     return result
 
 
+# ====== Step 1.5: iFinD精确行情（补充指标）======
+def fetch_ifind_detailed(stocks):
+    """用iFinD获取预过滤股票的PB等精确行情
+    iFinD实时行情仅支持: open/high/low/latest/yclose/changeRatio/volume/amount/pb
+    其他字段(pe_ttm/turnoverRate/volumeRatio)返回null，暂不获取
+    月度消耗: ~800次API调用（1554只÷500只/批×3次/天×22天）
+    """
+    token = _get_ifind_token()
+    if not token:
+        log("  ⚠️ iFinD token不可用，跳过精确行情")
+        return stocks
+    
+    t0 = time.time()
+    codes = [f"{s['code']}.{'SH' if s['code'].startswith('6') else 'SZ'}" for s in stocks]
+    
+    detailed = {}
+    batch_size = 500
+    for i in range(0, len(codes), batch_size):
+        batch = codes[i:i+batch_size]
+        codes_str = ",".join(batch)
+        data = _ifind_post("real_time_quotation", {
+            "codes": codes_str,
+            "indicators": "open,high,low,latest,yclose,changeRatio,volume,amount,pb"
+        }, timeout=30)
+        if data and 'tables' in data and data['tables']:
+            for table in data['tables']:
+                try:
+                    inner = table.get('table', table)
+                    thscode = table.get('thscode', '')
+                    if isinstance(thscode, list):
+                        thscode = thscode[0] if thscode else ''
+                    code = str(thscode).split('.')[0] if '.' in str(thscode) else ''
+                    if not code:
+                        continue
+                    detailed[code] = {
+                        'pb': _safe_float(inner.get('pb')),
+                    }
+                except Exception:
+                    continue
+    
+    # 合并精确数据到原始股票列表
+    for s in stocks:
+        if s['code'] in detailed:
+            s.update(detailed[s['code']])
+    
+    t1 = time.time()
+    if detailed:
+        log(f"  ✅ iFinD精确行情: {len(detailed)}只 (PB数据) ({t1-t0:.2f}秒)")
+    else:
+        log(f"  ⚠️ iFinD精确行情: 无数据")
+    return stocks
 
 
+def fetch_sector_ranking():
+    """获取板块涨幅排名（使用板块分析模块）
+    返回: [{'name': 板块名, 'change': 涨幅, 'leaders': [领涨股列表]}, ...]
+    """
+    t0 = time.time()
+    try:
+        # 使用板块分析模块获取板块排名
+        sector_data = get_sector_ranking()
+        if sector_data:
+            result = []
+            # 处理行业板块
+            for s in sector_data.get('industry', [])[:20]:
+                result.append({
+                    'name': s.get('name', ''),
+                    'change': s.get('change', 0),
+                    'leaders': []
+                })
+            t1 = time.time()
+            log(f"  📊 板块排名: {len(result)}个板块 ({t1-t0:.2f}秒)")
+            return result
+    except Exception as e:
+        log(f"  ⚠️ 板块排名查询异常: {e}")
+    return []
+
+
+# ====== 信号股深度分析（iFinD历史K线）======
+def fetch_signal_deep_analysis(signal_stocks):
+    """对V10信号股获取iFinD完整历史K线，做深度技术验证
+    消耗: ~2500条/次（10只×250天），月度~16.5万条/100万配额=16.5%
+    """
+    token = _get_ifind_token()
+    if not token:
+        log("  ⚠️ iFinD token不可用，跳过深度分析")
+        return signal_stocks
+    
+    if not signal_stocks:
+        return signal_stocks
+    
+    t0 = time.time()
+    
+    for stock in signal_stocks:
+        code = stock['code']
+        suffix = ".SH" if code.startswith('6') else ".SZ"
+        ifind_code = f"{code}{suffix}"
+        
+        try:
+            data = _ifind_post("cmd_history_quotation", {
+                "codes": ifind_code,
+                "indicators": "open,high,low,close,volume,amount,changeRatio",
+                "startdate": "2025-06-01",  # 约250个交易日
+                "enddate": datetime.now().strftime('%Y-%m-%d'),
+                "functionpara": {"Fill": "Blank"}
+            }, timeout=15)
+            
+            if not data or 'tables' not in data or not data.get('tables'):
+                continue
+            
+            table = data['tables'][0]
+            inner = table.get('table', table)
+            dates = inner.get('time', [])
+            closes = inner.get('close', [])
+            highs = inner.get('high', [])
+            lows = inner.get('low', [])
+            volumes = inner.get('volume', [])
+            
+            if not closes or len(closes) < 100:
+                continue
+            
+            import numpy as np
+            close_arr = np.array(closes, dtype=float)
+            high_arr = np.array(highs, dtype=float)
+            low_arr = np.array(lows, dtype=float)
+            vol_arr = np.array(volumes, dtype=float)
+            n = len(close_arr)
+            
+            # === 深度技术指标 ===
+            
+            # 1. 长期趋势（EMA120/200）
+            def ema(data, period):
+                alpha = 2.0 / (period + 1)
+                result = np.empty_like(data, dtype=float)
+                result[0] = data[0]
+                for i in range(1, len(data)):
+                    result[i] = data[i] * alpha + result[i-1] * (1 - alpha)
+                return result
+            
+            ema120 = ema(close_arr, 120)
+            ema200 = ema(close_arr, 200)
+            
+            # 2. 长期高点（120日最高）
+            high_120 = float(np.max(high_arr[-120:])) if n >= 120 else float(np.max(high_arr))
+            low_120 = float(np.min(low_arr[-120:])) if n >= 120 else float(np.min(low_arr))
+            
+            # 3. 成交量趋势（近20日均量 vs 近60日均量）
+            vol_20 = float(np.mean(vol_arr[-20:])) if n >= 20 else float(np.mean(vol_arr))
+            vol_60 = float(np.mean(vol_arr[-60:])) if n >= 60 else float(np.mean(vol_arr))
+            vol_trend = vol_20 / vol_60 if vol_60 > 0 else 1.0
+            
+            # 4. 价格位置（当前价在120日高低点中的位置）
+            current_price = close_arr[-1]
+            price_pos = (current_price - low_120) / (high_120 - low_120) if high_120 > low_120 else 0.5
+            
+            # 5. 长期支撑位（120日最低+5%）
+            support_120 = low_120 * 1.05
+            
+            # 6. 突破确认（当前价>120日高点）
+            breakout = current_price > high_120 * 0.98
+            
+            # 保存深度分析结果
+            stock['deep_analysis'] = {
+                'ema120': round(float(ema120[-1]), 3),
+                'ema200': round(float(ema200[-1]), 3),
+                'high_120d': round(high_120, 3),
+                'low_120d': round(low_120, 3),
+                'vol_trend': round(vol_trend, 3),
+                'price_position': round(price_pos, 3),
+                'support_120d': round(support_120, 3),
+                'breakout': breakout,
+                'long_trend': '多头' if ema120[-1] > ema200[-1] else '空头',
+            }
+            
+            # 深度评分（0-5分）
+            deep_score = 0
+            if ema120[-1] > ema200[-1]:
+                deep_score += 1  # 长期多头
+            if vol_trend > 1.2:
+                deep_score += 1  # 放量趋势
+            if price_pos > 0.5:
+                deep_score += 1  # 价格位置强
+            if breakout:
+                deep_score += 1  # 突破确认
+            if current_price > ema120[-1]:
+                deep_score += 1  # 站上EMA120
+            
+            stock['deep_score'] = deep_score
+            stock['deep_tag'] = f"{'⭐' * deep_score} 深度评分{deep_score}/5"
+            
+        except Exception:
+            continue
+    
+    t1 = time.time()
+    log(f"  ✅ 信号股深度分析: {len(signal_stocks)}只 ({t1-t0:.2f}秒)")
+    return signal_stocks
+
+
+# ====== 策略回测验证 ======
+def backtest_v10_strategy(code, days=500):
+    """用iFinD历史数据回测V10策略
+    返回: 回测结果（胜率/盈亏比/最大回撤等）
+    """
+    token = _get_ifind_token()
+    if not token:
+        return None
+    
+    suffix = ".SH" if code.startswith('6') else ".SZ"
+    ifind_code = f"{code}{suffix}"
+    
+    try:
+        # 获取历史K线
+        data = _ifind_post("cmd_history_quotation", {
+            "codes": ifind_code,
+            "indicators": "open,high,low,close,volume",
+            "startdate": (datetime.now() - __import__('datetime').timedelta(days=days)).strftime('%Y-%m-%d'),
+            "enddate": datetime.now().strftime('%Y-%m-%d'),
+            "functionpara": {"Fill": "Blank"}
+        }, timeout=20)
+        
+        if not data or 'tables' not in data or not data.get('tables'):
+            return None
+        
+        table = data['tables'][0]
+        inner = table.get('table', table)
+        closes = inner.get('close', [])
+        highs = inner.get('high', [])
+        lows = inner.get('low', [])
+        volumes = inner.get('volume', [])
+        opens = inner.get('open', [])
+        
+        if not closes or len(closes) < 200:
+            return None
+        
+        import numpy as np
+        close_arr = np.array(closes, dtype=float)
+        high_arr = np.array(highs, dtype=float)
+        low_arr = np.array(lows, dtype=float)
+        vol_arr = np.array(volumes, dtype=float)
+        open_arr = np.array(opens, dtype=float)
+        n = len(close_arr)
+        
+        # 模拟V10策略回测
+        def ema(data, period):
+            alpha = 2.0 / (period + 1)
+            result = np.empty_like(data, dtype=float)
+            result[0] = data[0]
+            for i in range(1, len(data)):
+                result[i] = data[i] * alpha + result[i-1] * (1 - alpha)
+            return result
+        
+        ema7 = ema(close_arr, 7)
+        ema20 = ema(close_arr, 20)
+        ema120 = ema(close_arr, 120)
+        ema200 = ema(close_arr, 200)
+        
+        # V5.1: MACD(20,80,9) for death cross exit
+        ema20_macd = ema(close_arr, 20)
+        ema80 = ema(close_arr, 80)
+        dif = ema20_macd - ema80
+        dea = ema(dif, 9)
+        
+        # VOL_MA5
+        kernel = np.ones(5) / 5
+        vol_ma5 = np.convolve(vol_arr, kernel, mode='full')[:n]
+        
+        # 模拟交易
+        trades = []
+        position = None
+        stop_loss_pct = -0.06
+        take_profit_pct = 0.10
+        
+        for i in range(200, n):
+            # 买入条件
+            if position is None:
+                if (close_arr[i] > ema120[i] and close_arr[i] > ema200[i] and
+                    ema120[i] > ema200[i] and
+                    ema7[i] > ema20[i] and
+                    close_arr[i] > open_arr[i] and
+                    vol_arr[i] > vol_ma5[i] * 1.5):
+                    position = {
+                        'buy_price': close_arr[i],
+                        'buy_idx': i,
+                        'stop_loss': close_arr[i] * (1 + stop_loss_pct),
+                    }
+            
+            # 卖出条件
+            elif position is not None:
+                pnl = (close_arr[i] - position['buy_price']) / position['buy_price']
+                
+                # 止损
+                if close_arr[i] < position['stop_loss']:
+                    trades.append({
+                        'buy_price': position['buy_price'],
+                        'sell_price': close_arr[i],
+                        'pnl': pnl,
+                        'hold_days': i - position['buy_idx'],
+                        'exit_reason': '止损'
+                    })
+                    position = None
+                # 止盈
+                elif pnl >= take_profit_pct:
+                    trades.append({
+                        'buy_price': position['buy_price'],
+                        'sell_price': close_arr[i],
+                        'pnl': pnl,
+                        'hold_days': i - position['buy_idx'],
+                        'exit_reason': '止盈'
+                    })
+                    position = None
+                # 移动止盈（从最高点回撤3%）
+                elif ema7[i] < ema20[i]:  # 通道死叉退出
+                    trades.append({
+                        'buy_price': position['buy_price'],
+                        'sell_price': close_arr[i],
+                        'pnl': pnl,
+                        'hold_days': i - position['buy_idx'],
+                        'exit_reason': '通道死叉'
+                    })
+                    position = None
+                # V5.1新增: MACD死叉退出（DIF下穿DEA）
+                elif i > 0 and dif[i] < dea[i] and dif[i-1] >= dea[i-1]:
+                    trades.append({
+                        'buy_price': position['buy_price'],
+                        'sell_price': close_arr[i],
+                        'pnl': pnl,
+                        'hold_days': i - position['buy_idx'],
+                        'exit_reason': 'MACD死叉'
+                    })
+                    position = None
+        
+        # 统计
+        if not trades:
+            return None
+        
+        wins = [t for t in trades if t['pnl'] > 0]
+        losses = [t for t in trades if t['pnl'] <= 0]
+        
+        win_rate = len(wins) / len(trades) if trades else 0
+        avg_win = np.mean([t['pnl'] for t in wins]) if wins else 0
+        avg_loss = np.mean([abs(t['pnl']) for t in losses]) if losses else 0
+        profit_factor = avg_win / avg_loss if avg_loss > 0 else 0
+        total_return = np.prod([1 + t['pnl'] for t in trades]) - 1
+        
+        # 最大回撤
+        equity = [1]
+        for t in trades:
+            equity.append(equity[-1] * (1 + t['pnl']))
+        equity = np.array(equity)
+        peak = np.maximum.accumulate(equity)
+        drawdown = (equity - peak) / peak
+        max_drawdown = float(np.min(drawdown))
+        
+        return {
+            'total_trades': len(trades),
+            'win_rate': round(win_rate * 100, 1),
+            'avg_win': round(avg_win * 100, 2),
+            'avg_loss': round(avg_loss * 100, 2),
+            'profit_factor': round(profit_factor, 2),
+            'total_return': round(total_return * 100, 2),
+            'max_drawdown': round(max_drawdown * 100, 2),
+            'avg_hold_days': round(np.mean([t['hold_days'] for t in trades]), 1),
+            'trades': trades[-5:],  # 最近5笔交易
+        }
+        
+    except Exception as e:
+        return None
 
 
 
 # ====== Step 2: K线获取 ======
 
 def fetch_klines(code, count=250):
-    """日K线数据（纯腾讯API，QMT已禁用）
-    腾讯逐只~0.1s/只
-    批量场景走batch_prefetch_klines的缓存
-    """
-    # ====== 腾讯优先（单只最快）======
-    # 腾讯K线：ifzq.gtimg.cn（web.ifzq已501被WAF封，2026-06起改用裸域名+_var参数）
+    """腾讯前复权日K线"""
     secid = f"sh{code}" if code.startswith('6') else f"sz{code}"
-    url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={secid},day,,,{count},qfq"
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={secid},day,,,{count},qfq"
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        resp = urllib.request.urlopen(req, timeout=8, context=_ifind_ctx)
-        raw = resp.read().decode('utf-8')
-        # _var格式: kline_dayqfq={...json...}
-        json_str = raw.split('=', 1)[1] if '=' in raw else raw
-        data = json.loads(json_str)
-        sec_data = data.get('data', {}).get(secid, {})
-        bars = sec_data.get('qfqday', []) or sec_data.get('day', [])
-        if bars and len(bars) >= 200:
-            return {
-                'open': np.array([float(b[1]) for b in bars]),
-                'close': np.array([float(b[2]) for b in bars]),
-                'high': np.array([float(b[3]) for b in bars]),
-                'low': np.array([float(b[4]) for b in bars]),
-                'volume': np.array([float(b[5]) for b in bars]),
-            }
-    except Exception:
-        pass
-
-    # ====== QMT降级（已禁用，保留代码结构但不走QMT）======
-    if _HAS_QUOTE_ADAPTER:
-        try:
-            kline_bars = get_kline(code, period="1d", count=count, prefer_qmt=False)
-            if kline_bars and len(kline_bars) >= 200:
-                return {
-                    'open': np.array([float(b['open']) for b in kline_bars]),
-                    'close': np.array([float(b['close']) for b in kline_bars]),
-                    'high': np.array([float(b['high']) for b in kline_bars]),
-                    'low': np.array([float(b['low']) for b in kline_bars]),
-                    'volume': np.array([float(b['volume']) for b in kline_bars]),
-                }
-        except Exception:
-            pass
-
-    return None
-
-
-# ====== Step 2.5: QMT批量K线预取（性能关键优化）======
-# 全局K线缓存：预过滤后一次性批量拉取，_scan_one_rt直接查缓存
-_kline_cache = {}
-
-def batch_prefetch_klines(codes):
-    """批量预取K线（腾讯30线程并发优先，QMT SSH降级）
-    实测：腾讯30线程1500只~25s vs QMT SSH批量~60s+
-    QMT仅作降级兜底
-    结果存入全局 _kline_cache，_scan_one_rt 直接查缓存
-    """
-    global _kline_cache
-    _kline_cache = {}  # 清空旧缓存
-
-    if not codes:
-        return
-
-    t0 = time.time()
-
-    # ====== 腾讯30线程并发（最快）======
-    log(f"  📡 腾讯K线批量获取({len(codes)}只, 30线程)...")
-    _tencent_fill_klines(codes)
-    t1 = time.time()
-    tc_count = len(_kline_cache)
-    log(f"  ✅ 腾讯K线: {tc_count}/{len(codes)}只 ({t1-t0:.1f}秒)")
-
-    # ====== QMT补缺（腾讯未获取到的）======
-    # 06-12: 腾讯K线API被WAF封501时，tc_count=0，QMT补缺会处理全部
-    # 阈值从0.9降到0.5，腾讯拿到一半以上就用腾讯，否则QMT全补
-    if _HAS_QUOTE_ADAPTER and tc_count < len(codes) * 0.5:
-        missing = [c for c in codes if c not in _kline_cache]
-        if missing and len(missing) > 5:
-            log(f"  ⚡ QMT补缺{len(missing)}只K线（腾讯仅获{tc_count}只）...")
-            try:
-                force_refresh()
-                batch_size = 50
-                qmt_filled = 0
-                for i in range(0, len(missing), batch_size):
-                    batch = missing[i:i+batch_size]
-                    batch_data = get_batch_klines(batch, period="1d", count=250, prefer_qmt=False)
-                    if batch_data:
-                        for code, bars in batch_data.items():
-                            if bars and len(bars) >= 200:
-                                _kline_cache[code] = {
-                                    'open': np.array([float(b['open']) for b in bars]),
-                                    'close': np.array([float(b['close']) for b in bars]),
-                                    'high': np.array([float(b['high']) for b in bars]),
-                                    'low': np.array([float(b['low']) for b in bars]),
-                                    'volume': np.array([float(b['volume']) for b in bars]),
-                                }
-                                qmt_filled += 1
-                if qmt_filled > 0:
-                    log(f"  ✅ QMT补缺: +{qmt_filled}只 → 总计{len(_kline_cache)}/{len(codes)}只")
-            except Exception as e:
-                log(f"  ⚠️ QMT批量K线异常: {e}")
-
-    # ====== 腾讯部分补缺（腾讯拿到50%以上但不到100%）======
-    elif _HAS_QUOTE_ADAPTER and tc_count < len(codes) * 0.95:
-        missing = [c for c in codes if c not in _kline_cache]
-        if missing and len(missing) > 5:
-            log(f"  ⚡ QMT补缺{len(missing)}只K线（腾讯缺漏）...")
-            try:
-                force_refresh()
-                batch_size = 50
-                qmt_filled = 0
-                for i in range(0, len(missing), batch_size):
-                    batch = missing[i:i+batch_size]
-                    batch_data = get_batch_klines(batch, period="1d", count=250, prefer_qmt=False)
-                    if batch_data:
-                        for code, bars in batch_data.items():
-                            if bars and len(bars) >= 200:
-                                _kline_cache[code] = {
-                                    'open': np.array([float(b['open']) for b in bars]),
-                                    'close': np.array([float(b['close']) for b in bars]),
-                                    'high': np.array([float(b['high']) for b in bars]),
-                                    'low': np.array([float(b['low']) for b in bars]),
-                                    'volume': np.array([float(b['volume']) for b in bars]),
-                                }
-                                qmt_filled += 1
-                if qmt_filled > 0:
-                    log(f"  ✅ QMT补缺: +{qmt_filled}只 → 总计{len(_kline_cache)}/{len(codes)}只")
-            except Exception as e:
-                log(f"  ⚠️ QMT批量K线异常: {e}")
-
-
-def _tencent_fill_klines(codes):
-    """腾讯逐只获取K线，填入缓存（30线程并发）"""
-    _lock = threading.Lock()
-
-    def _fetch_one(code):
-        data = _fetch_klines_tencent(code)  # 直接走腾讯，不走QMT
-        if data:
-            with _lock:
-                _kline_cache[code] = data
-
-    with ThreadPoolExecutor(max_workers=30) as executor:
-        futures = {executor.submit(_fetch_one, c): c for c in codes}
-        done = 0
-        for f in as_completed(futures):
-            done += 1
-            if done % 200 == 0:
-                log(f"    腾讯K线进度: {done}/{len(codes)}")
-
-
-def _fetch_klines_tencent(code, count=250):
-    """纯腾讯K线获取（不尝试QMT，用于批量预取的腾讯降级路径）"""
-    # 腾讯K线：ifzq.gtimg.cn（web.ifzq已501被WAF封，2026-06起改用裸域名+_var参数）
-    secid = f"sh{code}" if code.startswith('6') else f"sz{code}"
-    url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={secid},day,,,{count},qfq"
-    try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        resp = urllib.request.urlopen(req, timeout=8, context=_ifind_ctx)
-        raw = resp.read().decode('utf-8')
-        # _var格式: kline_dayqfq={...json...}
-        json_str = raw.split('=', 1)[1] if '=' in raw else raw
-        data = json.loads(json_str)
+        resp = urllib.request.urlopen(url, timeout=8, context=_ifind_ctx)
+        data = json.loads(resp.read())
         sec_data = data.get('data', {}).get(secid, {})
         bars = sec_data.get('qfqday', []) or sec_data.get('day', [])
         if not bars or len(bars) < 200:
@@ -736,6 +890,7 @@ def _fetch_klines_tencent(code, count=250):
             'high': np.array([float(b[3]) for b in bars]),
             'low': np.array([float(b[4]) for b in bars]),
             'volume': np.array([float(b[5]) for b in bars]),
+            'dates': [b[0] for b in bars],
         }
     except Exception:
         return None
@@ -832,47 +987,19 @@ def scan_stock_rt(close, high, low, volume, open_price):
 
 
 def _scan_one_rt(stock):
-    """扫描单只股票（日K线 + 分钟K线混合模式）
-    优先从批量预取缓存取K线，缓存miss再单独拉
-    """
+    """扫描单只股票（日K线 + 分钟K线混合模式）"""
     code = stock['code']
-
-    # 优先从批量预取缓存取K线
-    kdata = _kline_cache.get(code)
-    if kdata is None:
-        # 缓存miss，单独拉取（走QMT+腾讯降级）
-        kdata = fetch_klines(code)
+    kdata = fetch_klines(code)
     if kdata is None:
         return None
 
     # K线API在盘中已返回今日K线（日期=今天，close=实时价）
     # 直接用，不追加虚拟K线，避免重复
-    # BUT: QMT补缺的K线可能截止到昨天，缺少今日数据
-    # 检测最后K线日期是否为今天，如果不是则用实时行情追加虚拟K线
     close_ext = kdata['close']
     high_ext = kdata['high']
     low_ext = kdata['low']
     vol_ext = kdata['volume']
     open_ext = kdata['open']
-    
-    # 06-12: 腾讯K线WAF封禁时走QMT补缺，QMT K线可能缺今日数据
-    # 检测方法：如果最后一根K线的收盘价==最高价==最低价（盘中虚拟K线特征不明显）
-    # 更可靠：用stock的实时行情数据追加今日虚拟K线
-    if stock and len(close_ext) > 0:
-        rt_price = stock.get('price', 0)
-        rt_open = stock.get('open', 0)
-        rt_high = stock.get('high', 0)
-        rt_low = stock.get('low', 0)
-        rt_vol = stock.get('volume', 0)
-        last_close = float(close_ext[-1])
-        # 如果实时价格与最后一根K线收盘价差距>2%，说明K线不是今天的
-        if rt_price > 0 and abs(rt_price - last_close) / last_close > 0.02:
-            # 追加今日虚拟K线
-            close_ext = np.append(close_ext, rt_price)
-            high_ext = np.append(high_ext, rt_high if rt_high > 0 else rt_price)
-            low_ext = np.append(low_ext, rt_low if rt_low > 0 else rt_price)
-            vol_ext = np.append(vol_ext, rt_vol if rt_vol > 0 else 0)
-            open_ext = np.append(open_ext, rt_open if rt_open > 0 else rt_price)
 
     result = scan_stock_rt(close_ext, high_ext, low_ext, vol_ext, open_ext)
     if result is None or not result['signals']:
@@ -886,9 +1013,9 @@ def _scan_one_rt(stock):
     # Vibe-Trading技术确认 (SMC + 缠论 + K线形态)
     vibe_result = {'score': 0, 'tags': []}
     try:
-        # 取最近60根K线做Vibe分析（30根太少，缠论信号需更多数据确认）
+        # 取最近30根K线做Vibe分析
         n = len(close_ext)
-        _s = max(0, n - 60)
+        _s = max(0, n - 30)
         v_h = high_ext[_s:].copy()
         v_l = low_ext[_s:].copy()
         v_c = close_ext[_s:].copy()
@@ -929,18 +1056,12 @@ def main():
     time_str = now.strftime('%H:%M:%S')
     date_str = now.strftime('%Y-%m-%d')
 
-    # 数据源报告
-    if _HAS_QUOTE_ADAPTER:
-        log(f"📊 数据源: 腾讯API(纯) — QMT已禁用")
-    else:
-        log(f"📊 数据源: 腾讯(主), quote_adapter未安装")
-
     log(f"{'='*60}")
     log(f"⚡ V10 盘中实时全扫描 {date_str} {time_str}")
     log(f"{'='*60}")
 
-    # [1/5] 全市场实时行情
-    log("\n[1/5] 获取全市场实时行情...")
+    # [1/4] 全市场实时行情
+    log("\n[1/4] 获取全市场实时行情...")
     t0 = time.time()
     stocks = fetch_all_realtime()
     t1 = time.time()
@@ -950,16 +1071,16 @@ def main():
     prefiltered = prefilter_stocks(stocks)
     log(f"  预过滤: {len(stocks)}只 → {len(prefiltered)}只 (省{len(stocks)-len(prefiltered)}只)")
     
-    # [3/5] 批量K线预取（纯腾讯API）
-    log(f"\n[3/5] 批量K线预取（{len(prefiltered)}只）...")
-    prefiltered_codes = [s['code'] for s in prefiltered]
-    batch_prefetch_klines(prefiltered_codes)
-    cache_hit = len(_kline_cache)
-    log(f"  K线缓存: {cache_hit}/{len(prefiltered_codes)}只")
-
-    # [4/5] V10扫描（K线已预取，扫描阶段直接查缓存 + iFinD分钟K线确认）
-    log(f"\n[4/5] V10实时扫描（⚡30线程 + iFinD分钟K线确认）...")
-    log(f"  K线缓存命中率: {cache_hit}/{len(prefiltered_codes)} ({cache_hit/max(len(prefiltered_codes),1)*100:.0f}%)")
+    # [3/5] iFinD精确行情（补充PE/PB/换手率/量比）
+    prefiltered = fetch_ifind_detailed(prefiltered)
+    
+    # [4/5] 板块排名（用于报告输出）
+    sector_leaders = fetch_sector_ranking()
+    # sector_codes 不再计算——sector_leaders 已改为 {'name','change','leaders'} 结构，无 'code' 字段
+    # 原逻辑期望旧数据结构，这里保留调用（日志有用），sector_codes 后续未被使用
+    
+    # [5/5] 并行扫描
+    log(f"\n[2/4] V10实时扫描（⚡30线程 + iFinD分钟K线确认）...")
     results = []
     errors = 0
     _lock = threading.Lock()
@@ -985,7 +1106,7 @@ def main():
                 errors += 1
 
     t3 = time.time()
-    log(f"\n[5/5] 扫描完成: {len(prefiltered)}只 | 耗时{t3-t1:.1f}秒 | 命中{len(results)}只 | 错误{errors}只")
+    log(f"\n[3/4] 扫描完成: {len(prefiltered)}只 | 耗时{t3-t1:.1f}秒 | 命中{len(results)}只 | 错误{errors}只")
 
     # [4/4] 输出结果
     if results:
@@ -1053,7 +1174,12 @@ def main():
                 wl_item['intraday_ok'] = r['intraday_ok']
             watchlist.append(wl_item)
 
-        # 保存观察池
+        # [6/5] 信号股深度分析（iFinD历史K线）
+        if results:
+            log(f"\n[6/5] 信号股深度分析...")
+            results = fetch_signal_deep_analysis(results)
+        
+        # [7/5] 保存观察池
         wl_path = os.path.expanduser('~/.hermes/cache/v10_watchlist.json')
         with open(wl_path, 'w', encoding='utf-8') as f:
             json.dump({

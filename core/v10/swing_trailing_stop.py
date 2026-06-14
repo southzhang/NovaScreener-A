@@ -49,7 +49,7 @@ for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]:
 
 def fetch_klines(code, days=120):
     prefix = "sh" if code.startswith("6") else "sz"
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_day&param={prefix}{code},day,,,{days+10},qfq"
+    url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_day&param={prefix}{code},day,,,{days+10},qfq"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         resp = urllib.request.urlopen(req, timeout=10)

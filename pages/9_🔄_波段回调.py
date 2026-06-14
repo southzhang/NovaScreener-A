@@ -53,9 +53,9 @@ if st.button("🔍 扫描回调机会", type="primary", width='stretch') and cod
         try:
             import requests, json
             prefix = "sh" if code.startswith("6") else "sz"
-            url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={prefix}{code},day,,,120,qfq"
+            url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={prefix}{code},day,,,120,qfq"
             resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
-            data = json.loads(resp.text)
+            json_str = resp.text.split("=", 1)[1] if "=" in resp.text else resp.text; data = json.loads(json_str)
             sec_data = data.get("data", {}).get(f"{prefix}{code}", {})
             bars = sec_data.get("qfqday", []) or sec_data.get("day", [])
 

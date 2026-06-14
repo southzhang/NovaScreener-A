@@ -24,7 +24,7 @@ def save_cache(data):
 def get_kline_after(code, buy_date, days=3):
     """获取买入日后的K线数据"""
     secid = ("sh" if code.startswith("6") else "sz") + code
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_day&param={secid},day,,,15,qfq"
+    url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_day&param={secid},day,,,15,qfq"
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     resp = urllib.request.urlopen(req, timeout=10)
     txt = resp.read().decode("utf-8", errors="ignore")

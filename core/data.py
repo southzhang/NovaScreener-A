@@ -126,7 +126,9 @@ def sina_klines(code: str, days: int = 250) -> pd.DataFrame:
 def _parse_tencent_kline_resp(text: str, symbol: str) -> pd.DataFrame | None:
     """解析腾讯K线API响应，返回DataFrame或None（含防御性类型检查）"""
     try:
-        data = json.loads(text)
+        # _var格式: kline_dayqfq={...json...}
+        json_str = text.split('=', 1)[1] if '=' in text else text
+        data = json.loads(json_str)
     except (json.JSONDecodeError, ValueError):
         return None
     if not isinstance(data, dict):
@@ -175,7 +177,7 @@ def tencent_klines(code: str, days: int = 250) -> pd.DataFrame:
     else:
         prefix = "bj"
     symbol = f"{prefix}{code}"
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,{days},qfq"
+    url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={symbol},day,,,{days},qfq"
 
     for attempt in range(2):  # 最多2次尝试
         try:

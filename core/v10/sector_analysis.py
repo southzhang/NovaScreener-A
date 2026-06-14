@@ -2,6 +2,8 @@
 """
 板块分析模块 - 热门板块识别、板块轮动分析、板块强度评分
 用于V10选股系统和盯盘系统
+
+数据源：东方财富push2 API（行业板块+概念板块），降级到腾讯行情ETF
 """
 
 import json
@@ -28,92 +30,75 @@ def fetch_url(url, timeout=8):
     try:
         req = Request(url, headers=HEADERS)
         with urlopen(req, timeout=timeout) as resp:
-            return resp.read().decode("gbk", errors="ignore")
+            raw = resp.read()
+            # 东方财富push2 API返回UTF-8编码，优先UTF-8解码
+            # 仅在UTF-8解码失败时降级到GBK（部分旧接口可能返回GBK）
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return raw.decode("gbk", errors="replace")
     except Exception as e:
         _log(f"⚠️ 请求失败 {url[:60]}... {e}")
         return None
 
 
-def _ifind_post(api_name, params, timeout=8):
-    """调用iFinD HTTP API"""
+def _fetch_eastmoney_sectors(sector_type: str, top_n: int = 20) -> list:
+    """从东方财富push2 API获取板块涨幅排名
+    sector_type: 'industry' 或 'concept'
+    返回: [{'name': 板块名, 'change': 涨幅, 'code': 代码}, ...]
+    """
+    fs_map = {
+        'industry': 'm:90+t:2',
+        'concept': 'm:90+t:3',
+    }
+    fs = fs_map.get(sector_type, 'm:90+t:2')
+
+    url = (
+        f"http://push2.eastmoney.com/api/qt/clist/get"
+        f"?pn=1&pz={top_n}&po=1&np=1&fltt=2&invt=2&fid=f3"
+        f"&fs={fs}&fields=f2,f3,f4,f12,f14"
+    )
+
     try:
-        import urllib.request
-        import json
-        
-        url = f"http://192.168.110.210:18080/{api_name}"
-        data = json.dumps(params).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0'
-        })
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+        text = fetch_url(url, timeout=8)
+        if not text:
+            return []
+
+        data = json.loads(text)
+        if not data or data.get('rc') != 0:
+            return []
+
+        diff = data.get('data', {}).get('diff', [])
+        results = []
+        for item in diff:
+            name = item.get('f14', '')
+            change = item.get('f3', 0)
+            code = item.get('f12', '')
+            try:
+                change = float(change)
+            except (ValueError, TypeError):
+                change = 0
+            results.append({
+                'name': name,
+                'change': change,
+                'code': code,
+            })
+        return results
     except Exception as e:
-        _log(f"iFinD API调用失败: {e}")
-        return None
+        _log(f"⚠️ 东方财富板块数据获取失败({sector_type}): {e}")
+        return []
 
 
 def fetch_sector_ranking():
-    """用问财获取今日板块涨幅排名
-    返回: [{'name': 板块名, 'change': 涨幅, 'leaders': [领涨股列表]}, ...]
+    """用东方财富push2 API获取今日板块涨幅排名
+    返回: [{'name': 板块名, 'change': 涨幅, 'code': 代码}, ...]
     """
     t0 = time.time()
-    result = []
-    try:
-        data = _ifind_post("smart_stock_picking", {
-            "searchstring": "涨幅前3板块的股票",
-            "searchtype": "stock"
-        }, timeout=15)
-        if data and data.get('errorcode') == 0 and data.get('tables'):
-            table = data['tables'][0].get('table', {})
-            codes = table.get('股票代码', [])
-            names = table.get('股票简称', [])
-            today_str = datetime.now().strftime('%Y%m%d')
-            changes = table.get(f'涨跌幅:前复权[{today_str}]', [])
-            for i in range(min(20, len(codes))):
-                code = str(codes[i]).split('.')[0] if i < len(codes) else ''
-                name = names[i] if i < len(names) else ''
-                change = float(changes[i]) if i < len(changes) else 0
-                result.append({'code': code, 'name': name, 'change': change})
-    except Exception as e:
-        _log(f"⚠️ 板块排名查询异常: {e}")
+    result = _fetch_eastmoney_sectors('industry', top_n=20)
     t1 = time.time()
     if result:
         _log(f"📊 板块排名: {len(result)}只 ({t1-t0:.2f}秒)")
     return result
-
-
-def get_sector_data_from_ifind():
-    """从iFinD获取板块数据（行业板块+概念板块）"""
-    try:
-        # 获取行业板块涨幅排名
-        industry_data = _ifind_post("ths_hot_ranking", {
-            "index_type": "industry",
-            "top_n": 20
-        }, timeout=5)  # 缩短超时时间
-        
-        # 获取概念板块涨幅排名
-        concept_data = _ifind_post("ths_hot_ranking", {
-            "index_type": "concept",
-            "top_n": 20
-        }, timeout=5)  # 缩短超时时间
-        
-        result = {
-            'industry': [],
-            'concept': [],
-            'timestamp': datetime.now().isoformat()
-        }
-        
-        if industry_data and industry_data.get('errorcode') == 0:
-            result['industry'] = industry_data.get('tables', [{}])[0].get('table', {})
-        
-        if concept_data and concept_data.get('errorcode') == 0:
-            result['concept'] = concept_data.get('tables', [{}])[0].get('table', {})
-        
-        return result
-    except Exception as e:
-        _log(f"⚠️ iFinD板块数据获取失败: {e}")
-        return None
 
 
 def get_sector_data_from_tencent():
@@ -128,7 +113,7 @@ def get_sector_data_from_tencent():
     
     try:
         codes = ','.join(sector_etfs.keys())
-        url = f"https://qt.gtimg.cn/q={codes}"
+        url = f"http://qt.gtimg.cn/q={codes}"
         text = fetch_url(url, timeout=10)
         if not text:
             return []
@@ -161,22 +146,29 @@ def get_sector_data_from_tencent():
 
 
 def get_sector_ranking():
-    """获取板块涨幅排名（优先iFinD，降级腾讯ETF）"""
-    # 尝试iFinD
-    ifind_data = get_sector_data_from_ifind()
-    if ifind_data and ifind_data.get('industry'):
-        _log("✅ 使用iFinD板块数据")
-        return ifind_data
-    
+    """获取板块涨幅排名（优先东方财富push2 API，降级腾讯ETF）"""
+    # 尝试东方财富push2 API
+    industry = _fetch_eastmoney_sectors('industry', top_n=20)
+    concept = _fetch_eastmoney_sectors('concept', top_n=20)
+
+    if industry or concept:
+        _log("✅ 使用东方财富push2板块数据")
+        return {
+            'industry': industry,
+            'concept': concept,
+            'source': 'eastmoney_push2',
+            'timestamp': datetime.now().isoformat(),
+        }
+
     # 降级到腾讯ETF
-    _log("⚠️ iFinD不可用，降级到腾讯板块ETF")
+    _log("⚠️ 东方财富API不可用，降级到腾讯板块ETF")
     etf_data = get_sector_data_from_tencent()
     if etf_data:
         return {
             'industry': [{'name': e['name'], 'change': e['change']} for e in etf_data[:10]],
             'concept': [],
             'source': 'tencent_etf',
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
         }
     
     return None
@@ -187,7 +179,7 @@ def get_stock_sector(code):
     try:
         # 从腾讯行情获取板块信息
         prefix = "sh" if code.startswith("6") else "sz"
-        url = f"https://qt.gtimg.cn/q={prefix}{code}"
+        url = f"http://qt.gtimg.cn/q={prefix}{code}"
         text = fetch_url(url, timeout=5)
         if not text:
             return None
@@ -389,6 +381,9 @@ if __name__ == '__main__':
     if ranking:
         print(f"  行业板块: {len(ranking.get('industry', []))}个")
         print(f"  概念板块: {len(ranking.get('concept', []))}个")
+        print(f"  数据源: {ranking.get('source', 'unknown')}")
+        for s in ranking.get('industry', [])[:5]:
+            print(f"    {s['name']}: {s['change']:+.2f}%")
     
     # 2. 板块轮动分析
     print("\n2. 板块轮动:")

@@ -43,10 +43,19 @@ def get_realtime(code):
     parts = text.split("=")[1].strip('";\n').split("~")
     if len(parts) < 50:
         return None
+    price_val = float(parts[3]) if parts[3] else 0
+    yclose_val = float(parts[4]) if parts[4] else 0
+    api_chg = float(parts[32]) if parts[32] else None
+    if api_chg is not None:
+        chg = api_chg
+    elif yclose_val > 0 and price_val > 0:
+        chg = round((price_val / yclose_val - 1) * 100, 2)
+    else:
+        chg = 0
     try:
         return {
-            "price": float(parts[3]) if parts[3] else 0,
-            "change_pct": float(parts[32]) if parts[32] else 0,
+            "price": price_val,
+            "change_pct": chg,
             "amount_wan": float(parts[37]) if parts[37] else 0,
             "circ_yi": float(parts[44]) if parts[44] else 0,
         }
@@ -59,12 +68,12 @@ def get_amplitude_percentile(code):
     """计算当前振幅在近30日的分位数(0-100)"""
     prefix = "sh" if code.startswith("6") else "sz"
     symbol = f"{prefix}{code}"
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={symbol},day,,,30,qfq"
+    url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={symbol},day,,,30,qfq"
     text = fetch_url(url)
     if not text:
         return None
     try:
-        data = json.loads(text)
+        data = json.loads(text.split("=", 1)[1] if "=" in text else text)
         klines = data["data"][symbol].get("day") or data["data"][symbol].get("qfqday") or []
     except (json.JSONDecodeError, KeyError):
         return None
@@ -149,30 +158,23 @@ def score_stock(code, name, signal_level, key_levels=None, capital_flow=None, fu
     elif cap > 0:
         c_score = 10
         c_desc = f"主力净流入+{cap:.0f}万"
-    elif cap == 0:
-        # cap=0可能是数据缺失（缓存不存在/接口返回默认值），给半分
-        c_score = 7.5
-        c_desc = "资金面数据缺失(给半分)"
     else:
         c_score = 0
         c_desc = f"主力净流出{cap:.0f}万"
     details["资金面"] = (c_score, 20, c_desc)
 
-    # 4. 振幅分位 (15分) - 尾盘选股活跃股振幅偏高是正常特征，适当放宽
+    # 4. 振幅分位 (15分)
     amp_pct = get_amplitude_percentile(code)
     if amp_pct is not None:
-        if amp_pct < 30:
+        if amp_pct < 40:
             a_score = 15
             a_desc = f"{amp_pct:.0f}%低位"
         elif amp_pct <= 60:
-            a_score = 10
+            a_score = 7.5
             a_desc = f"{amp_pct:.0f}%中位"
-        elif amp_pct <= 80:
-            a_score = 5
-            a_desc = f"{amp_pct:.0f}%偏高"
         else:
             a_score = 0
-            a_desc = f"{amp_pct:.0f}%极高"
+            a_desc = f"{amp_pct:.0f}%高位"
     else:
         a_score = 7.5
         a_desc = "数据缺失(给半分)"
@@ -188,36 +190,40 @@ def score_stock(code, name, signal_level, key_levels=None, capital_flow=None, fu
     details["板块风口"] = (w_score, 10, w_desc)
     total += w_score
 
-    # 6. 追高风险 (10分) - 分段扣分，强庄信号天然涨幅偏高需宽容
-    # 旧逻辑：>5%直接0分，对强庄信号不公平（强庄买涨5%+是正常特征）
-    # 新逻辑：结合信号等级动态调整容忍度
-    if signal_level in ("全买入", "强庄买"):
-        # 强信号天然涨幅高，给予更宽容的评分
-        if abs(change_pct) < 5:
-            r_score = 10
-            r_desc = f"涨幅{change_pct:+.1f}%安全(强信号)"
-        elif abs(change_pct) <= 7:
-            r_score = 5
-            r_desc = f"涨幅{change_pct:+.1f}%偏高(强信号宽容)"
-        elif abs(change_pct) <= 9:
-            r_score = 2
-            r_desc = f"涨幅{change_pct:+.1f}%较高(强信号)"
-        else:
-            r_score = 0
-            r_desc = f"涨幅{change_pct:+.1f}%追高风险"
+    # 6. 追高风险 (10分) - 06-09升级：Vibe≥+2强时追高豁免
+    # 新规则：强力趋势票不该因"涨多了"就一票否决
+    # - 涨幅<3%: 满分10
+    # - 涨幅3-5%: 5分
+    # - 涨幅>5%: 但如果是强趋势(V10全买入+资金流入>0)，给5分而非0分
+    #   （LLM Vibe≥+2会在后续合并时进一步豁免追高扣分）
+    # 一票否决线：主板9.5%，创业板/科创板19%（按涨跌幅限制分档）
+    price_limit_pct = 20.0 if code.startswith(("300", "688")) else 10.0
+    hard_limit_pct = price_limit_pct * 0.95  # 9.5% 或 19%
+    if abs(change_pct) >= hard_limit_pct:
+        r_score = 0
+        r_desc = f"涨幅{change_pct:+.1f}%接近涨停(限制{price_limit_pct:.0f}%)，一票否决"
+        details["追高风险"] = (r_score, 10, r_desc)
+        total += r_score
+    elif abs(change_pct) < 3:
+        r_score = 10
+        r_desc = f"涨幅{change_pct:+.1f}%安全"
+        details["追高风险"] = (r_score, 10, r_desc)
+        total += r_score
+    elif abs(change_pct) <= 5:
+        r_score = 5
+        r_desc = f"涨幅{change_pct:+.1f}%适中"
+        details["追高风险"] = (r_score, 10, r_desc)
+        total += r_score
     else:
-        # 基础买保持原逻辑
-        if abs(change_pct) < 3:
-            r_score = 10
-            r_desc = f"涨幅{change_pct:+.1f}%安全"
-        elif abs(change_pct) <= 5:
+        # 涨幅>5%：强趋势给5分(不完全否定)，弱趋势0分
+        if signal_level in ("全买入", "强庄买") and (capital_flow or {}).get(code, 0) > 0:
             r_score = 5
-            r_desc = f"涨幅{change_pct:+.1f}%适中"
+            r_desc = f"涨幅{change_pct:+.1f}%但强趋势+资金流入，追高可接受"
         else:
             r_score = 0
             r_desc = f"涨幅{change_pct:+.1f}%追高"
-    details["追高风险"] = (r_score, 10, r_desc)
-    total += r_score
+        details["追高风险"] = (r_score, 10, r_desc)
+        total += r_score
 
     price = rt["price"] if rt else 0
     return round(total), details, price, change_pct

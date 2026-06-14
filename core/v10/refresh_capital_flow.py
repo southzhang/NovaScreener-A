@@ -93,11 +93,20 @@ def fetch_tencent_quote(codes):
                 main_inflow = float(parts[50])
             except (ValueError, IndexError):
                 pass
+        yclose_val = float(parts[4]) if parts[4] else 0
+        price_val = float(parts[3]) if parts[3] else 0
+        api_chg = float(parts[32]) if parts[32] else None
+        if api_chg is not None:
+            chg = api_chg
+        elif yclose_val > 0 and price_val > 0:
+            chg = round((price_val / yclose_val - 1) * 100, 2)
+        else:
+            chg = 0
         results[code] = {
             "name": parts[1],
             "code": code,
-            "current_price": float(parts[3]) if parts[3] else 0,
-            "change_pct": float(parts[32]) if parts[32] else 0,
+            "current_price": price_val,
+            "change_pct": chg,
             "amount": int(float(parts[37]) * 10000) if parts[37] else 0,
             "turnover_rate": float(parts[38]) if parts[38] else 0,
             "main_inflow": main_inflow,  # 万元，ff_接口>parts[50]降级

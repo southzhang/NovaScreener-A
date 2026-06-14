@@ -48,14 +48,23 @@ def fetch_quotes(codes):
         parts = line.split('~')
         if len(parts) < 40:
             continue
+        yesterday_val = float(parts[4]) if parts[4] else 0
+        current_val = float(parts[3]) if parts[3] else 0
+        api_chg = float(parts[32]) if parts[32] else None
+        if api_chg is not None:
+            chg = api_chg
+        elif yesterday_val > 0 and current_val > 0:
+            chg = round((current_val / yesterday_val - 1) * 100, 2)
+        else:
+            chg = 0
         results.append({
             'name': parts[1],
             'code': parts[2],
-            'current': float(parts[3]) if parts[3] else 0,       # ⭐ 现价
-            'yesterday': float(parts[4]) if parts[4] else 0,      # 昨收
+            'current': current_val,       # ⭐ 现价
+            'yesterday': yesterday_val,      # 昨收
             'open': float(parts[5]) if parts[5] else 0,
             'change_amt': float(parts[31]) if parts[31] else 0,   # 涨跌额
-            'change_pct': float(parts[32]) if parts[32] else 0,
+            'change_pct': chg,
             'high': float(parts[33]) if parts[33] else 0,
             'low': float(parts[34]) if parts[34] else 0,
             'volume': float(parts[36]) if parts[36] else 0,       # 成交量(手)

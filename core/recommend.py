@@ -359,17 +359,32 @@ def score_and_recommend(
         w_desc = "板块无加分"
     dimensions.append(DimensionScore("板块风口", w_score, 10, w_desc))
 
-    # ===== 6. 追高风险 (10分) =====
-    if abs(change_pct) < 3:
+    # ===== 6. 追高风险 (10分) - 06-09升级 =====
+    # 新规则：强趋势票(V10全买入/强庄买+资金流入)涨幅>5%给5分而非0分
+    # LLM Vibe≥+2时后续合并会进一步豁免追高扣分
+    # 一票否决线：主板9.5%，创业板/科创板19%（按涨跌幅限制分档）
+    price_limit_pct = 20.0 if code.startswith(("300", "688")) else 10.0
+    hard_limit_pct = price_limit_pct * 0.95  # 9.5% 或 19%
+    if abs(change_pct) >= hard_limit_pct:
+        r_score = 0
+        r_desc = f"涨幅{change_pct:+.1f}%接近涨停(限制{price_limit_pct:.0f}%)，一票否决"
+        dimensions.append(DimensionScore("追高风险", r_score, 10, r_desc))
+    elif abs(change_pct) < 3:
         r_score = 10
         r_desc = f"涨幅{change_pct:+.1f}%安全"
+        dimensions.append(DimensionScore("追高风险", r_score, 10, r_desc))
     elif abs(change_pct) <= 5:
         r_score = 5
         r_desc = f"涨幅{change_pct:+.1f}%适中"
+        dimensions.append(DimensionScore("追高风险", r_score, 10, r_desc))
     else:
-        r_score = 0
-        r_desc = f"涨幅{change_pct:+.1f}%追高"
-    dimensions.append(DimensionScore("追高风险", r_score, 10, r_desc))
+        if signal_type in ("全买入", "强庄买") and capital_flow > 0:
+            r_score = 5
+            r_desc = f"涨幅{change_pct:+.1f}%但强趋势+资金流入，追高可接受"
+        else:
+            r_score = 0
+            r_desc = f"涨幅{change_pct:+.1f}%追高"
+        dimensions.append(DimensionScore("追高风险", r_score, 10, r_desc))
 
     # ===== 总分 =====
     total = sum(d.score for d in dimensions)

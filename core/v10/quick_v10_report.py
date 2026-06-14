@@ -11,10 +11,12 @@ def get_tx_klines(code):
     all_bars = []
     page = 1
     while True:
-        url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={secid},day,,,{page},qfq"
+        url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={secid},day,,,{page},qfq"
         try:
             resp = urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent":"Mozilla/5.0"}), timeout=10)
-            raw = json.loads(resp.read())
+            resp_text = resp.read().decode('utf-8', errors='ignore')
+            json_str = resp_text.split('=', 1)[1] if '=' in resp_text else resp_text
+            raw = json.loads(json_str)
             if not isinstance(raw, dict):
                 break
             data = raw.get('data', {})

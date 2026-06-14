@@ -406,7 +406,7 @@ def vibe_score(high, low, close, open_):
     Vibe综合评分（SMC + 缠论 + K线形态）。
 
     参数:
-        high, low, close, open_: numpy数组，至少30根K线
+        high, low, close, open_: numpy数组，至少30根K线（推荐60根以获得更可靠的缠论信号）
 
     返回:
         dict: {
