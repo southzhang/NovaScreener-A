@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "hithink-sector-selector": {
+      "name": "hithink-sector-selector",
+      "zip_url": "http://ms.10jqka.com.cn/gateway/market/api/v1/skills/square/download?name=hithink-sector-selector",
+      "source": "skillhub",
+      "version": ""
+    }
+  }
+}

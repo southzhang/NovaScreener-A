@@ -13,6 +13,7 @@ import json
 import re
 import time
 import os
+import subprocess
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
@@ -235,6 +236,86 @@ def _fetch_position_20d(code: str) -> float:
 
 
 # ===== 板块热度 =====
+
+def _iwencai_query(query: str, limit: int = 20) -> Optional[dict]:
+    """调用问财API查询板块/行业数据
+    
+    返回: {"datas": [...], "code_count": int} 或 None
+    """
+    cli_path = os.path.expanduser("~/Projects/quant-watchdog/skills/hithink-sector-selector/scripts/cli.py")
+    if not os.path.exists(cli_path):
+        return None
+    try:
+        env = os.environ.copy()
+        result = subprocess.run(
+            ["python3", cli_path, "--query", query, "--limit", str(limit)],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            if data.get("success"):
+                return data
+    except Exception:
+        pass
+    return None
+
+
+def fetch_iwencai_sector_rank(limit: int = 20) -> dict:
+    """通过问财获取行业板块涨幅排名（替代/补充东方财富API）
+    
+    返回: {板块名: 涨幅%}
+    优先用同花顺三级行业指数（有简称），CSI指数简称不是行业名
+    """
+    # 查询同花顺行业指数，返回有"指数简称"的数据
+    result = _iwencai_query("今日涨幅最大的行业板块", limit=limit)
+    if not result:
+        result = _iwencai_query("涨幅前N的行业板块", limit=limit)
+    if not result:
+        return {}
+    sector_heat = {}
+    for item in result.get("datas", []):
+        name = item.get("指数简称", "")
+        change = item.get("最新涨跌幅:前复权") or item.get("涨跌幅") or 0
+        if name and change:
+            try:
+                sector_heat[name] = float(change)
+            except (ValueError, TypeError):
+                pass
+    return sector_heat
+
+
+def fetch_iwencai_stock_sectors(codes: list) -> dict:
+    """通过问财批量获取股票所属行业（替代/补充东方财富API）
+    
+    codes: 股票代码列表，如 ['603399', '600519']
+    返回: {code: 一级行业名}
+    
+    限制：问财每次查询约支持10-20只股票，分批查询
+    """
+    result_map = {}
+    batch_size = 15  # 问财单次查询上限约20只
+    
+    for i in range(0, len(codes), batch_size):
+        batch = codes[i:i + batch_size]
+        # 构造查询：用股票代码查询所属行业
+        names_or_codes = "、".join(batch)
+        query = f"{names_or_codes}所属行业板块"
+        data = _iwencai_query(query, limit=batch_size)
+        if not data:
+            continue
+        for item in data.get("datas", []):
+            code_raw = item.get("股票代码", "")
+            # 格式可能是 603399.SH 或 603399
+            code = code_raw.replace(".SH", "").replace(".SZ", "")
+            industries = item.get("所属同花顺行业", [])
+            if isinstance(industries, list) and industries:
+                # 取一级行业（第一个）
+                result_map[code] = industries[0]
+            elif isinstance(industries, str):
+                result_map[code] = industries
+        time.sleep(0.3)  # 避免请求过快
+    
+    return result_map
 
 def fetch_sector_rank(limit: int = 15) -> dict:
     url = (f"https://push2.eastmoney.com/api/qt/clist/get?cb=&pn=1&pz={limit}"
@@ -514,10 +595,12 @@ def run_auction_scan(progress_callback=None) -> dict:
     if len(all_stocks) < 100:
         return {"stocks": [], "sector_heat": {}, "stats": {"error": "数据不足，可能非交易时段"}}
 
-    # 2. 板块热度
+    # 2. 板块热度（iwencai优先，东方财富fallback）
     if progress_callback:
         progress_callback(0.3, "获取板块热度...")
-    sector_heat = fetch_sector_rank()
+    sector_heat = fetch_iwencai_sector_rank(20)
+    if not sector_heat:
+        sector_heat = fetch_sector_rank()  # 东方财富fallback
     top_sectors = set(sector_heat.keys())
 
     # 3. 快筛候选池 — 竞价阶段筛选条件
@@ -557,29 +640,32 @@ def run_auction_scan(progress_callback=None) -> dict:
     sector_map = {}  # code -> sector
     sector_auction_count = {}  # sector -> 异动数量
 
-    # 板块映射缓存：本地缓存1天，避免每次都请求东方财富API
+    # 板块映射：iwencai批量查询 → 本地缓存 → 东方财富逐个fallback
+    # 1) 尝试iwencai批量获取（含一二三级行业）
+    if progress_callback:
+        progress_callback(0.65, "获取板块数据(问财)...")
+    iwencai_sectors = fetch_iwencai_stock_sectors(candidate_codes)
+    if iwencai_sectors:
+        sector_map.update(iwencai_sectors)
+
+    # 2) 从本地缓存补全iwencai未覆盖的
     sector_cache_path = os.path.expanduser('~/.hermes/cache/sector_map.json')
     sector_cache = {}
-    sector_cache_fresh = False
     if os.path.exists(sector_cache_path):
         try:
             with open(sector_cache_path) as f:
                 cache_data = json.load(f)
             cache_time = cache_data.get('_time', 0)
             from datetime import datetime as _dt
-            # 缓存有效期：当天（跨日失效）
             if _dt.now().strftime('%Y%m%d') == _dt.fromtimestamp(cache_time).strftime('%Y%m%d'):
                 sector_cache = cache_data.get('map', {})
-                sector_cache_fresh = True
         except Exception:
             pass
-
-    # 从缓存中取板块
     for code in candidate_codes:
-        if code in sector_cache:
+        if code not in sector_map and code in sector_cache:
             sector_map[code] = sector_cache[code]
 
-    # 缓存未命中才请求API
+    # 3) 东方财富逐个fallback补全剩余
     missing_codes = [c for c in candidate_codes if c not in sector_map]
 
     def _get_sector_batch(code_list):
@@ -591,22 +677,20 @@ def run_auction_scan(progress_callback=None) -> dict:
         return result
 
     with ThreadPoolExecutor(max_workers=10) as executor:
-        # 只请求缓存未命中的板块
         if missing_codes:
             chunks = [missing_codes[i:i+20] for i in range(0, len(missing_codes), 20)]
             sector_futures = [executor.submit(_get_sector_batch, chunk) for chunk in chunks]
             for f in as_completed(sector_futures):
                 sector_map.update(f.result())
 
-    # 保存板块缓存
-    if missing_codes:
-        try:
-            os.makedirs(os.path.dirname(sector_cache_path), exist_ok=True)
-            sector_cache.update(sector_map)
-            with open(sector_cache_path, 'w', encoding='utf-8') as f:
-                json.dump({'_time': time.time(), 'map': sector_cache}, f, ensure_ascii=False)
-        except Exception:
-            pass
+    # 保存板块缓存（合并iwencai和东方财富结果）
+    try:
+        os.makedirs(os.path.dirname(sector_cache_path), exist_ok=True)
+        sector_cache.update(sector_map)
+        with open(sector_cache_path, 'w', encoding='utf-8') as f:
+            json.dump({'_time': time.time(), 'map': sector_cache}, f, ensure_ascii=False)
+    except Exception:
+        pass
 
     # 统计同板块异动数量
     for code, sec in sector_map.items():
