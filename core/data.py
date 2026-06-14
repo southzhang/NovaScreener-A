@@ -3,12 +3,13 @@
 数据源优先级：
 - K线数据：新浪财经（免费稳定）> 腾讯K线（WAF封禁备用）> akshare（mini_racer不可用）
 - 实时行情：腾讯行情 qt.gtimg.cn（免费无限制）
-- 板块数据：东方财富板块排名
+- 板块数据：问财(iwencai) > 东方财富 > 腾讯ETF降级
 - 资金面：iFinD HTTP API > 10jqka > 缓存
 - 基本面：iFinD HTTP API
 """
 import time
 import json
+import subprocess
 import numpy as np
 import requests
 import pandas as pd
@@ -536,13 +537,143 @@ def get_market_indices() -> list[dict]:
 
 # ===== 板块数据 =====
 
+# 问财(iwencai)板块数据 — 优先数据源
+_IWENCAI_CLI = os.path.expanduser("~/Projects/quant-watchdog/skills/hithink-sector-selector/scripts/cli.py")
+_iwencai_sector_cache = {}     # {板块名: 涨幅%}
+_iwencai_sector_cache_ts = 0   # 缓存时间戳
+_iwencai_stock_cache = {}      # {code: 一级行业}
+_iwencai_stock_cache_ts = 0
+
+
+def _iwencai_query(query: str, limit: int = 20) -> dict | None:
+    """调用问财CLI查询"""
+    if not os.path.exists(_IWENCAI_CLI):
+        return None
+    try:
+        result = subprocess.run(
+            ["python3", _IWENCAI_CLI, "--query", query, "--limit", str(limit)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            if data.get("success"):
+                return data
+    except Exception:
+        pass
+    return None
+
+
+def _get_iwencai_sector_ranking(limit: int = 20) -> dict:
+    """问财获取行业板块涨幅排名 → {板块名: 涨幅%}
+    同时包含三级行业和一级行业（从三级行业汇总），方便个股匹配
+    """
+    global _iwencai_sector_cache, _iwencai_sector_cache_ts
+    # 5分钟缓存
+    if _iwencai_sector_cache and time.time() - _iwencai_sector_cache_ts < 300:
+        return _iwencai_sector_cache
+
+    result = _iwencai_query("今日涨幅最大的行业板块", limit=limit)
+    if not result:
+        result = _iwencai_query("涨幅前N的行业板块", limit=limit)
+    if not result:
+        return _iwencai_sector_cache  # 返回旧缓存或空dict
+
+    ranking = {}
+    # 一级行业汇总: {一级行业: [涨幅列表]}
+    level1_groups = {}
+    for item in result.get("datas", []):
+        name = item.get("指数简称", "")
+        change = item.get("最新涨跌幅:前复权") or item.get("涨跌幅") or 0
+        itype = item.get("指数类型", "")
+        if name and change:
+            try:
+                pct = float(change)
+                ranking[name] = pct
+                # 如果是同花顺三级行业，查一下它的父行业
+                # 通过问财的个股行业映射反推不太现实
+                # 直接把排名里的三级行业也用一级行业名加入
+                # 例如: "铜"→"有色金属", "钴"→"有色金属"
+                # 我们需要额外查询来建立这个映射
+            except (ValueError, TypeError):
+                pass
+
+    # 查排名里三级行业对应的一级行业
+    # 用排名里的板块名查所属行业（问财会返回该板块的代表性股票）
+    if ranking:
+        top_names = list(ranking.keys())[:10]  # 只查前10
+        query = "、".join(top_names) + "所属行业"
+        data = _iwencai_query(query, limit=10)
+        if data:
+            for item in data.get("datas", []):
+                industries = item.get("所属同花顺行业", [])
+                if isinstance(industries, list) and len(industries) >= 1:
+                    level1 = industries[0]  # 一级行业，如"有色金属"
+                    # 匹配排名名：三级行业名在industries列表中
+                    level3 = industries[-1] if len(industries) >= 3 else industries[-1]
+                    if level3 in ranking:
+                        if level1 not in level1_groups:
+                            level1_groups[level1] = []
+                        level1_groups[level1].append(ranking[level3])
+
+    # 把一级行业的平均涨幅加入排名
+    for level1, changes in level1_groups.items():
+        if changes and level1 not in ranking:
+            ranking[level1] = round(sum(changes) / len(changes), 2)
+
+    if ranking:
+        _iwencai_sector_cache = ranking
+        _iwencai_sector_cache_ts = time.time()
+    return _iwencai_sector_cache
+
+
+def _get_iwencai_stock_sectors(codes: list[str]) -> dict:
+    """问财批量获取股票所属行业 → {code: 一级行业}"""
+    global _iwencai_stock_cache, _iwencai_stock_cache_ts
+    # 30分钟缓存
+    if _iwencai_stock_cache and time.time() - _iwencai_stock_cache_ts < 1800:
+        return _iwencai_stock_cache
+
+    result_map = {}
+    batch_size = 15
+    for i in range(0, len(codes), batch_size):
+        batch = codes[i:i + batch_size]
+        query = "、".join(batch) + "所属行业板块"
+        data = _iwencai_query(query, limit=batch_size)
+        if not data:
+            continue
+        for item in data.get("datas", []):
+            code_raw = item.get("股票代码", "")
+            code = code_raw.replace(".SH", "").replace(".SZ", "")
+            industries = item.get("所属同花顺行业", [])
+            if isinstance(industries, list) and industries:
+                result_map[code] = industries  # 返回全部层级[一级行业, 二级行业, 三级行业]
+            elif isinstance(industries, str):
+                result_map[code] = [industries]
+        time.sleep(0.3)
+
+    if result_map:
+        _iwencai_stock_cache = result_map
+        _iwencai_stock_cache_ts = time.time()
+    return result_map
+
 # 缓存板块排名
 _sector_cache = {}
 _sector_cache_ts = 0
 
 
 def get_sector_ranking(limit: int = 30) -> list[dict]:
-    """获取板块涨幅排名（东方财富）"""
+    """获取板块涨幅排名（问财优先，东方财富fallback）
+    返回: [{'name': 板块名, 'code': 代码, 'change_pct': 涨幅, 'type': 类型}, ...]
+    """
+    # 1) 问财优先
+    iwencai_rank = _get_iwencai_sector_ranking(limit)
+    if iwencai_rank:
+        return [
+            {"name": name, "code": "", "change_pct": pct, "type": "问财行业"}
+            for name, pct in sorted(iwencai_rank.items(), key=lambda x: x[1], reverse=True)[:limit]
+        ]
+
+    # 2) 东方财富fallback
     global _sector_cache, _sector_cache_ts
     import time
     if _sector_cache and time.time() - _sector_cache_ts < 300:
@@ -578,12 +709,24 @@ def get_sector_ranking(limit: int = 30) -> list[dict]:
 
 
 def get_stock_sectors(code: str) -> list[str]:
-    """获取股票所属板块（东方财富F10）"""
+    """获取股票所属板块（问财优先，东方财富F10 fallback）
+    返回所有层级行业名（一级行业优先），用于板块评分匹配
+    """
+    # 1) 问财优先（返回全部层级：一级行业、二级行业、三级行业）
+    if _iwencai_stock_cache and code in _iwencai_stock_cache:
+        sectors = _iwencai_stock_cache[code]
+        if isinstance(sectors, list):
+            return sectors
+        elif isinstance(sectors, str):
+            return [sectors]
+
+    # 2) 内存缓存
     cache_key = f"sectors_{code}"
     cached = _get_cached(cache_key)
     if cached is not None:
         return cached
 
+    # 3) 东方财富F10
     url = "https://datacenter.eastmoney.com/securities/api/data/v1/get"
     params = {
         "reportName": "RPT_F10_CORETHEME_BOARDTYPE",
@@ -610,6 +753,8 @@ def get_sector_score(code: str) -> float:
     前20 → +7分
     前30 → +4分
     不在前30 → 0分
+    
+    匹配策略：先精确匹配，再模糊匹配（包含关系）
     """
     sectors = get_stock_sectors(code)
     if not sectors:
@@ -623,9 +768,25 @@ def get_sector_score(code: str) -> float:
     best_rank = 999
     for sector_name in sectors:
         for rank_idx, r in enumerate(ranking):
-            if sector_name in r["name"] or r["name"] in sector_name:
+            rname = r.get("name", "")
+            # 精确匹配
+            if sector_name == rname:
                 best_rank = min(best_rank, rank_idx)
                 break
+            # 包含匹配（双向）
+            if sector_name in rname or rname in sector_name:
+                best_rank = min(best_rank, rank_idx)
+                break
+            # 行业归属匹配：同花顺三级行业和一级行业的对应
+            # 如 "锂" 属于 "有色金属"，"铜" 属于 "有色金属"
+            # 排名里的三级行业如果属于同一一级行业，也算匹配
+            if len(sectors) >= 2:
+                # sectors[0] 是一级行业，如"有色金属"
+                # 排名里的"铜"、"锂"可能是同属一级行业的三级行业
+                top_level = sectors[0]
+                if top_level and (top_level in rname or rname in top_level):
+                    best_rank = min(best_rank, rank_idx)
+                    break
 
     if best_rank < 10:
         return 10

@@ -3,11 +3,12 @@
 板块分析模块 - 热门板块识别、板块轮动分析、板块强度评分
 用于V10选股系统和盯盘系统
 
-数据源：东方财富push2 API（行业板块+概念板块），降级到腾讯行情ETF
+数据源：问财(iwencai) > 东方财富push2 API > 腾讯行情ETF降级
 """
 
 import json
 import os
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta
@@ -20,9 +21,32 @@ SECTOR_CACHE = os.path.join(CACHE_DIR, "sector_analysis.json")
 
 HEADERS = {"User-Agent": "Mozilla/5.0"}
 
+# 问财(iwencai)CLI路径
+_IWENCAI_CLI = os.path.expanduser("~/Projects/quant-watchdog/skills/hithink-sector-selector/scripts/cli.py")
+_iwencai_rank_cache = {}
+_iwencai_rank_cache_ts = 0
+
 
 def _log(msg):
     print(f"[板块分析] {msg}", file=sys.stderr)
+
+
+def _iwencai_query(query: str, limit: int = 20) -> dict | None:
+    """调用问财CLI查询"""
+    if not os.path.exists(_IWENCAI_CLI):
+        return None
+    try:
+        result = subprocess.run(
+            ["python3", _IWENCAI_CLI, "--query", query, "--limit", str(limit)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout)
+            if data.get("success"):
+                return data
+    except Exception:
+        pass
+    return None
 
 
 def fetch_url(url, timeout=8):
@@ -90,14 +114,39 @@ def _fetch_eastmoney_sectors(sector_type: str, top_n: int = 20) -> list:
 
 
 def fetch_sector_ranking():
-    """用东方财富push2 API获取今日板块涨幅排名
+    """用问财/东方财富push2 API获取今日板块涨幅排名
     返回: [{'name': 板块名, 'change': 涨幅, 'code': 代码}, ...]
+    优先级: 问财 > 东方财富
     """
+    # 1) 问财优先
+    global _iwencai_rank_cache, _iwencai_rank_cache_ts
+    if _iwencai_rank_cache and time.time() - _iwencai_rank_cache_ts < 300:
+        _log(f"📊 板块排名(问财缓存): {len(_iwencai_rank_cache)}只")
+        return _iwencai_rank_cache
+
+    result = _iwencai_query("今日涨幅最大的行业板块", limit=20)
+    if not result:
+        result = _iwencai_query("涨幅前N的行业板块", limit=20)
+    if result:
+        ranking = []
+        for item in result.get("datas", []):
+            name = item.get("指数简称", "")
+            change = item.get("最新涨跌幅:前复权") or item.get("涨跌幅") or 0
+            code = item.get("指数代码", "")
+            if name:
+                ranking.append({"name": name, "change": float(change) if change else 0, "code": code})
+        if ranking:
+            _iwencai_rank_cache = ranking
+            _iwencai_rank_cache_ts = time.time()
+            _log(f"📊 板块排名(问财): {len(ranking)}只")
+            return ranking
+
+    # 2) 东方财富fallback
     t0 = time.time()
     result = _fetch_eastmoney_sectors('industry', top_n=20)
     t1 = time.time()
     if result:
-        _log(f"📊 板块排名: {len(result)}只 ({t1-t0:.2f}秒)")
+        _log(f"📊 板块排名(东方财富): {len(result)}只 ({t1-t0:.2f}秒)")
     return result
 
 
@@ -146,8 +195,19 @@ def get_sector_data_from_tencent():
 
 
 def get_sector_ranking():
-    """获取板块涨幅排名（优先东方财富push2 API，降级腾讯ETF）"""
-    # 尝试东方财富push2 API
+    """获取板块涨幅排名（问财优先，东方财富fallback，腾讯ETF兜底）"""
+    # 1) 问财优先
+    iwencai_result = fetch_sector_ranking()
+    if iwencai_result:
+        _log("✅ 使用问财板块数据")
+        return {
+            'industry': iwencai_result,
+            'concept': [],
+            'source': 'iwencai',
+            'timestamp': datetime.now().isoformat(),
+        }
+
+    # 2) 东方财富push2 API
     industry = _fetch_eastmoney_sectors('industry', top_n=20)
     concept = _fetch_eastmoney_sectors('concept', top_n=20)
 
@@ -160,7 +220,7 @@ def get_sector_ranking():
             'timestamp': datetime.now().isoformat(),
         }
 
-    # 降级到腾讯ETF
+    # 3) 腾讯ETF兜底
     _log("⚠️ 东方财富API不可用，降级到腾讯板块ETF")
     etf_data = get_sector_data_from_tencent()
     if etf_data:
