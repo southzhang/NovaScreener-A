@@ -1,199 +1,130 @@
-"""竞价选股页面 — 09:28竞价结束扫描 + 6维评分买入推荐 + 进场建议"""
+"""竞价选股页面 v2 — 竞价专属4维评分 + 进场建议
+
+竞价 ≠ 盘中选股。竞价看的是：
+  1. 位置（低位启动 vs 高位加速）— 最核心
+  2. 高开幅度（2-4%最优，>6%是风险）
+  3. 竞价量能（竞价成交 vs 近期均量）
+  4. 板块共振（同板块异动 + 板块涨幅）
+
+进场方式：开盘后等回调介入，不是竞价直接买
+"""
 import streamlit as st
-import pandas as pd
 import numpy as np
 from core.auction import run_auction_scan, AuctionStock
-from core.data import get_stock_history, get_capital_flow, get_sector_score
-from core.recommend import generate_buy_recommendation
 from core.ui import inject_global_css, render_theme_toggle, render_page_header
 
 st.set_page_config(page_title="竞价选股", page_icon="⚡", layout="wide")
 inject_global_css()
 render_theme_toggle()
-render_page_header("⚡ 竞价选股", "09:25竞价结束 → 09:28扫描 → 09:30前出结果 · 趋势共振 · 游资爆量V1 · 游资竞价V2 + 板块热度 + V10交叉")
+render_page_header("⚡ 竞价选股", "09:25竞价结束 → 4维评分 → 开盘后择机介入 · 位置+高开+量能+板块")
 
-with st.expander("📖 策略说明"):
+with st.expander("📖 竞价4维评分说明"):
     st.html("""
     <div style="color:var(--text-secondary); line-height:1.8;">
-    <table style="width:100%; border-collapse:collapse;">
+    <p style="color:#ff6b35; font-weight:700; font-size:1.05em;">竞价选股 ≠ 盘中选股，竞价看的是开盘前的信号质量</p>
+    <table style="width:100%; border-collapse:collapse; margin:8px 0;">
     <tr style="border-bottom:2px solid #ff6b3540;">
-        <th style="padding:8px 0; color:#ff6b35; text-align:left;">策略</th>
-        <th style="padding:8px 0; color:#ff6b35; text-align:left;">条件</th>
-        <th style="padding:8px 0; color:#ff6b35; text-align:left;">适合</th>
+        <th style="padding:8px 0; color:#ff6b35; text-align:left; width:25%;">维度</th>
+        <th style="padding:8px 0; color:#ff6b35; text-align:left; width:15%;">满分</th>
+        <th style="padding:8px 0; color:#ff6b35; text-align:left;">评分逻辑</th>
     </tr>
     <tr style="border-bottom:1px solid var(--border-color);">
-        <td style="padding:8px 0;">🔥 趋势共振</td>
-        <td style="color:var(--text-secondary);">量比>3 + 涨幅3-6% + 成交额>2000万 + 流通<200亿</td>
-        <td style="color:var(--text-secondary);">趋势确认型</td>
+        <td style="padding:8px 0;">📍 位置</td>
+        <td style="padding:8px 0;">25分</td>
+        <td style="color:var(--text-secondary);">近20日跌/横盘→25分(低位启动) | 涨0-5%→22分 | 涨5-10%→15分 | 涨15%+→0分(高位风险)</td>
     </tr>
     <tr style="border-bottom:1px solid var(--border-color);">
-        <td style="padding:8px 0;">🎯 游资爆量V1</td>
-        <td style="color:var(--text-secondary);">量比>4 + 涨幅3-7% + 成交额>5000万 + 流通<100亿</td>
-        <td style="color:var(--text-secondary);">爆量追涨型</td>
+        <td style="padding:8px 0;">📈 高开幅度</td>
+        <td style="padding:8px 0;">25分</td>
+        <td style="color:var(--text-secondary);">2-4%→25分(最优) | 4-5%→15分 | 1-2%→15分 | >6%→0分(追高极险)</td>
+    </tr>
+    <tr style="border-bottom:1px solid var(--border-color);">
+        <td style="padding:8px 0;">📊 竞价量能</td>
+        <td style="padding:8px 0;">25分</td>
+        <td style="color:var(--text-secondary);">竞价成交额/近5日均量 ≥0.5x→25分(爆量) | ≥0.3x→20分(放量) | ≥0.15x→15分</td>
     </tr>
     <tr>
-        <td style="padding:8px 0;">💎 游资竞价V2</td>
-        <td style="color:var(--text-secondary);">量比>2 + 涨幅2-5% + 分档成交额 + 流通<100亿</td>
-        <td style="color:var(--text-secondary);">低吸潜伏型</td>
+        <td style="padding:8px 0;">🔥 板块共振</td>
+        <td style="padding:8px 0;">25分</td>
+        <td style="color:var(--text-secondary);">板块涨幅>2%→10分 | 热门板块→5分 | 同板块3+只异动→10分</td>
     </tr>
     </table>
     <br>
-    <strong style="color:#ff6b35;">Vibe评分</strong>: 振幅大+1 / 量价齐升+1 / 强势开盘+1 / 爆量+1 (满分4分)<br>
-    <strong style="color:#ff6b35;">竞价6维评分（100分制）：</strong>竞价信号级别 30分 | 基本面(ROE) 15分 | 资金面 20分 | 振幅分位 15分 | 板块风口 10分 | 追高风险 10分<br><br>
-    <span class="tag tag-up">🔴 强势竞价</span> 趋势共振 + V10交叉 + Vibe≥3 → 强推80+分<br>
-    <span class="tag tag-accent">🟠 活跃竞价</span> 游资爆量V1/V2 + 板块热 → 关注60+分<br>
-    <span class="tag tag-info">🟡 普通竞价</span> 单策略命中 → 观察40+分<br><br>
-    <strong style="color:#ff6b35;">进场建议分级：</strong><br>
-    ✅ <b>可进场</b> — 强势竞价(评分≥75) 或 V10交叉+活跃竞价(评分≥70)<br>
-    👁️ <b>观察</b> — 活跃竞价(评分≥55) 或 V10交叉(评分≥50)<br>
-    ❌ <b>不建议</b> — 评分不足或追高风险过大
+    <p><span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">✅ 可进场</span>
+    四维均达标 + 总分≥65 → <b>开盘5分钟等回调介入</b></p>
+    <p><span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">👁️ 观察</span>
+    有亮点但有短板 → <b>等15分钟看走势再决定</b></p>
+    <p><span style="background:#888; color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">❌ 放弃</span>
+    多维不足 → <b>不追</b></p>
+    <br>
+    <p style="color:var(--text-secondary);">⚠️ 竞价选股的进场方式是<b>开盘后择机介入</b>，不是竞价直接买。小幅高开+放量+低位+板块共振是最优组合。</p>
     </div>
     """)
 
 
-def _auction_signal_type(strategy: str, vibe_score: int, in_v10: bool, sector_hot: bool) -> tuple:
-    """将竞价策略映射为信号类型和评分基数"""
-    if strategy == "趋势共振" and in_v10 and vibe_score >= 3:
-        return "强势竞价", 85
-    elif strategy == "趋势共振" and (in_v10 or vibe_score >= 3):
-        return "强势竞价", 75
-    elif strategy == "趋势共振":
-        return "活跃竞价", 65
-    elif strategy == "游资爆量V1" and sector_hot:
-        return "活跃竞价", 70
-    elif strategy == "游资爆量V1":
-        return "活跃竞价", 60
-    elif strategy == "游资竞价V2" and sector_hot:
-        return "活跃竞价", 60
-    elif strategy == "游资竞价V2":
-        return "普通竞价", 50
+def _score_bar_html(score: float, max_score: float, label: str, desc: str) -> str:
+    """渲染单个维度评分条"""
+    pct = score / max_score if max_score > 0 else 0
+    if pct >= 0.8:
+        color = "#00c853"
+        icon = "🟢"
+    elif pct >= 0.6:
+        color = "#ffab40"
+        icon = "🟡"
+    elif pct > 0:
+        color = "#ff4b4b"
+        icon = "🟠"
     else:
-        return "普通竞价", 40
+        color = "#888"
+        icon = "⚪"
+    return (f'<div style="display:flex; align-items:center; gap:6px; margin:2px 0;">'
+            f'<span style="min-width:60px; color:var(--text-secondary); font-size:0.85em;">{icon}{label}</span>'
+            f'<div style="flex:1; height:8px; background:var(--bg-card); border-radius:4px; overflow:hidden;">'
+            f'<div style="width:{pct*100:.0f}%; height:100%; background:{color}; border-radius:4px;"></div>'
+            f'</div>'
+            f'<span style="min-width:30px; text-align:right; font-weight:600; color:{color};">{score:.0f}</span>'
+            f'<span style="color:var(--text-secondary); font-size:0.8em;">{desc}</span>'
+            f'</div>')
 
 
-def _classify_action(rec, signal_type: str, in_v10: bool) -> str:
-    """根据推荐结果+信号类型判定进场建议
+def _render_auction_card(s: AuctionStock):
+    """渲染单只竞价股票的4维评分卡片"""
+    # 4维评分条
+    dims_html = (
+        _score_bar_html(s.score_position, 25, "位置", s.desc_position) +
+        _score_bar_html(s.score_open, 25, "高开", s.desc_open) +
+        _score_bar_html(s.score_volume, 25, "量能", s.desc_volume) +
+        _score_bar_html(s.score_sector, 25, "板块", s.desc_sector)
+    )
 
-    返回: "可进场" / "观察" / "不建议"
-    """
-    score = rec.total_score if rec else 0
+    # 位置描述补充
+    pos_desc = f"近20日{s.position_20d:+.1f}%" if s.position_20d != 0 else "位置未知"
+    open_desc = f"高开{s.change_pct:+.1f}%"
+    vol_desc = f"量比{s.vol_ratio:.1f}" if s.vol_ratio > 0 else ""
+    sec_desc = f"{s.sector}" if s.sector else ""
 
-    # ✅ 可进场：强信号+高评分
-    if signal_type == "强势竞价" and score >= 75:
-        return "可进场"
-    if in_v10 and signal_type == "活跃竞价" and score >= 70:
-        return "可进场"
-
-    # 👁️ 观察：中等评分
-    if signal_type == "活跃竞价" and score >= 55:
-        return "观察"
-    if signal_type == "强势竞价" and score >= 55:
-        return "观察"
-    if in_v10 and score >= 50:
-        return "观察"
-
-    # ❌ 不建议
-    return "不建议"
-
-
-def _build_recommendation(s: AuctionStock):
-    """生成推荐结果，返回 (rec, signal_type) 或 (None, signal_type)"""
-    try:
-        hist = get_stock_history(s.code, days=250)
-        if hist.empty or len(hist) < 20:
-            return None, None
-
-        close_arr = hist["close"].values.astype(np.float64)
-        high_arr = hist["high"].values.astype(np.float64)
-        low_arr = hist["low"].values.astype(np.float64)
-        vol_arr = hist["volume"].values.astype(np.float64)
-        open_arr = hist["open"].values.astype(np.float64)
-
-        flow_data = get_capital_flow(s.code)
-        capital_flow = flow_data.get("main_net_inflow", 0) if flow_data else 0
-        sector_score = get_sector_score(s.code)
-
-        signal_type, base_score = _auction_signal_type(
-            s.strategy, s.vibe_score, s.in_v10, s.sector_hot
-        )
-
-        rec = generate_buy_recommendation(
-            code=s.code, name=s.name,
-            close=close_arr, high=high_arr, low=low_arr,
-            volume=vol_arr, open_price=open_arr,
-            signal_type=signal_type, score=base_score,
-            change_pct=s.change_pct,
-            capital_flow=capital_flow,
-            sector_score=sector_score,
-        )
-        return rec, signal_type
-    except Exception:
-        return None, None
-
-
-def _render_recommendation_card(rec, signal_type: str, action: str):
-    """渲染6维评分+买入推荐指标"""
-    if not rec:
-        return
-
-    # ---- 紧凑评分条 ----
-    dim_parts = []
-    for d in rec.dimensions:
-        pct = d.score / d.max_score if d.max_score > 0 else 0
-        if pct >= 0.8:
-            icon = "🟢"
-        elif pct >= 0.5:
-            icon = "🟡"
-        elif pct > 0:
-            icon = "🟠"
-        else:
-            icon = "⚪"
-        dim_parts.append(f"{icon}{d.name}{d.score:.0f}")
-    st.caption(" · ".join(dim_parts))
-
-    # ---- 核心指标一行（自定义HTML，红涨绿跌）----
-    ts = rec.trailing_stop
-    loss_pct = (rec.current_price - rec.stop_loss) / rec.current_price * 100
-    gain1_pct = (rec.target_1 - rec.current_price) / rec.current_price * 100
-    rr_color = "#00c853" if rec.risk_reward >= 2.0 else "#ffab40" if rec.risk_reward >= 1.5 else "#ff4b4b"
+    # 进场方式
+    if s.action == "可进场":
+        action_hint = "⏰ 开盘5分钟等回调介入"
+    elif s.action == "观察":
+        action_hint = "⏰ 等15分钟看走势再决定"
+    else:
+        action_hint = "❌ 不追"
 
     st.html(f"""
-    <div style="display:flex; gap:8px; flex-wrap:wrap; padding:8px 0; font-size:0.82em;">
-        <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
-            <div style="color:var(--text-secondary); font-size:0.8em;">📊 总分</div>
-            <div style="font-weight:700; color:#ff6b35;">{rec.total_score}分</div>
+    <div style="background:var(--bg-card); border-radius:8px; padding:10px 14px; margin:4px 0;">
+        {dims_html}
+        <div style="display:flex; gap:16px; font-size:0.82em; color:var(--text-secondary); margin-top:6px; flex-wrap:wrap;">
+            <span>{pos_desc}</span>
+            <span>{open_desc}</span>
+            <span>{vol_desc}</span>
+            <span>成交{s.amount_wan/10000:.1f}亿</span>
+            <span>{sec_desc}</span>
+            {'<span>📌V10交叉</span>' if s.in_v10 else ''}
         </div>
-        <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
-            <div style="color:var(--text-secondary); font-size:0.8em;">🎯 入场</div>
-            <div style="font-weight:700;">¥{rec.entry_price}</div>
-        </div>
-        <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
-            <div style="color:var(--text-secondary); font-size:0.8em;">🛑 止损</div>
-            <div style="font-weight:700; color:#00c853;">¥{rec.stop_loss}</div>
-            <div style="color:#00c853; font-size:0.85em;">-{loss_pct:.1f}%</div>
-        </div>
-        <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
-            <div style="color:var(--text-secondary); font-size:0.8em;">📈 目标</div>
-            <div style="font-weight:700; color:#ff4b4b;">¥{rec.target_1}</div>
-            <div style="color:#ff4b4b; font-size:0.85em;">+{gain1_pct:.1f}%</div>
-        </div>
-        <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
-            <div style="color:var(--text-secondary); font-size:0.8em;">盈亏比</div>
-            <div style="font-weight:700; color:{rr_color};">{rec.risk_reward}:1</div>
-        </div>
-        <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
-            <div style="color:var(--text-secondary); font-size:0.8em;">💰 仓位</div>
-            <div style="font-weight:700;">{rec.position_pct}%</div>
-        </div>
-        <div style="flex:2; min-width:120px; text-align:left; background:var(--bg-card); border-radius:6px; padding:6px 8px;">
-            <div style="color:var(--text-secondary); font-size:0.8em;">💡 推荐理由</div>
-            <div style="font-size:0.85em; color:var(--text-secondary); line-height:1.3;">{rec.reason}</div>
-        </div>
+        <div style="font-size:0.82em; color:#ff6b35; margin-top:4px;">{action_hint}</div>
     </div>
     """)
-
-    # ---- 风险提示 ----
-    st.caption(f"💡 {rec.reason} | ⚠️ {rec.risk_note}")
 
 
 # ===== 扫描按钮 =====
@@ -227,7 +158,7 @@ if st.button("🚀 开始竞价扫描", type="primary", width='stretch'):
         status.text("扫描完成！")
         st.rerun()
 
-# ===== 显示结果（从 session_state 读取）=====
+# ===== 显示结果 =====
 if st.session_state.get("auction_scanned"):
     stocks = st.session_state.get("auction_stocks", [])
     sector_heat = st.session_state.get("auction_sector_heat", {})
@@ -239,27 +170,20 @@ if st.session_state.get("auction_scanned"):
         st.info("📭 竞价时段无符合条件的股票")
         st.caption("注意: 竞价选股需在09:25-09:30之间运行")
     else:
-        # ===== 预计算推荐结果和进场建议 =====
-        rec_cache = {}  # code -> (rec, signal_type, action)
-        for s in stocks:
-            rec, signal_type = _build_recommendation(s)
-            if signal_type:
-                action = _classify_action(rec, signal_type, s.in_v10)
-            else:
-                action = "不建议"
-            rec_cache[s.code] = (rec, signal_type, action)
-
-        buy_list = [s for s in stocks if rec_cache.get(s.code, (None, None, "不建议"))[2] == "可进场"]
-        watch_list = [s for s in stocks if rec_cache.get(s.code, (None, None, "不建议"))[2] == "观察"]
+        # 分组
+        buy_list = [s for s in stocks if s.action == "可进场"]
+        watch_list = [s for s in stocks if s.action == "观察"]
+        drop_list = [s for s in stocks if s.action == "放弃"]
 
         # 汇总卡片
-        sum_cols = st.columns(5)
+        sum_cols = st.columns(6)
         sum_items = [
-            ("📊 扫描", f"{stats['total_scanned']}只", "var(--text-primary)"),
-            ("🎯 选出", f"{stats['total_selected']}只", "#ff6b35"),
-            ("🔥 趋势", f"{stats['trend_count']}", "#ff4b4b"),
-            ("🎯 游V1+V2", f"{stats['youzi_v1_count'] + stats['youzi_v2_count']}", "#ffab40"),
-            ("📌 V10交叉", f"{stats['v10_cross']}只", "#42a5f5"),
+            ("📊 扫描", f"{stats.get('total_scanned', 0)}只", "var(--text-primary)"),
+            ("🎯 候选", f"{stats.get('total_candidates', 0)}只", "#ff6b35"),
+            ("✅ 可进场", f"{len(buy_list)}只", "#ff4b4b"),
+            ("👁️ 观察", f"{len(watch_list)}只", "#ffab40"),
+            ("📌 V10交叉", f"{stats.get('v10_cross', 0)}只", "#42a5f5"),
+            ("⏱️ 耗时", f"{stats.get('elapsed', 0)}秒", "var(--text-secondary)"),
         ]
         for col, (label, value, color) in zip(sum_cols, sum_items):
             with col:
@@ -281,95 +205,88 @@ if st.session_state.get("auction_scanned"):
                     heat_parts.append(f"<span class='tag tag-info'>{name}</span>")
             st.html(f"<div style='margin:12px 0;'>📊 今日热点板块: {' '.join(heat_parts)}</div>")
 
-        # ===== 🎯 进场建议汇总 =====
-        if buy_list or watch_list:
-            st.html('<h2>🎯 进场建议</h2>')
+        # ===== ✅ 可进场 =====
+        if buy_list:
+            st.html('<h2>✅ 可进场 · 开盘5分钟等回调介入</h2>')
+            for s in buy_list:
+                v10_tag = " 📌V10交叉" if s.in_v10 else ""
+                chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-primary)"
+                sec_tag = f"<span class='tag tag-up'>🔥{s.sector}</span>" if s.sector_hot else f"<span class='tag tag-info'>{s.sector}</span>" if s.sector else ""
 
-            # 可进场卡片
-            if buy_list:
-                for s in buy_list:
-                    rec, signal_type, action = rec_cache.get(s.code, (None, "", "可进场"))
-                    score = rec.total_score if rec else 0
-                    entry = rec.entry_price if rec else s.price
-                    stop = rec.stop_loss if rec else 0
-                    stop_pct = f"-{(s.price - stop) / s.price * 100:.0f}%" if stop > 0 and s.price > 0 else ""
-                    target = rec.target_1 if rec else 0
-                    target_pct = f"+{(target - s.price) / s.price * 100:.0f}%" if target > 0 and s.price > 0 else ""
-                    position = f"{rec.position_pct}%" if rec else ""
-                    rr = f"{rec.risk_reward}:1" if rec else ""
-                    reason = rec.reason if rec else ""
-                    v10_tag = " 📌V10交叉" if s.in_v10 else ""
-                    vibe_str = f" Vibe{s.vibe_score}/4" if s.vibe_score else ""
-
-                    # 涨跌色
-                    chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-primary)"
-
-                    st.html(f"""
-                    <div style="background:var(--bg-card); border:1px solid var(--border-color);
-                                border-left:4px solid #ff4b4b; border-radius:10px;
-                                padding:16px 20px; margin-bottom:12px;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
-                            <div>
-                                <span style="font-weight:800; color:var(--text-primary); font-size:1.15em;">{s.name}</span>
-                                <span style="color:var(--text-secondary); margin-left:8px;">{s.code}</span>
-                                <span style="color:{chg_color}; font-weight:600; margin-left:12px;">
-                                    ¥{s.price:.2f} {s.change_pct:+.2f}%
-                                </span>
-                                <span style="color:var(--text-secondary); margin-left:8px; font-size:0.85em;">
-                                    量比{s.vol_ratio} {s.strategy}{v10_tag}{vibe_str}
-                                </span>
-                            </div>
-                            <div style="display:flex; gap:8px; align-items:center;">
-                                <span style="background:#ff4b4b; color:#fff; padding:3px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">✅ 可进场</span>
-                                <span class="tag tag-accent">{signal_type}</span>
-                                <span style="color:var(--text-secondary); font-size:0.85em;">评分 {score:.0f}</span>
-                            </div>
+                st.html(f"""
+                <div style="background:var(--bg-card); border:1px solid var(--border-color);
+                            border-left:4px solid #ff4b4b; border-radius:10px;
+                            padding:16px 20px; margin-bottom:12px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
+                        <div>
+                            <span style="font-weight:800; color:var(--text-primary); font-size:1.15em;">{s.name}</span>
+                            <span style="color:var(--text-secondary); margin-left:8px;">{s.code}</span>
+                            <span style="color:{chg_color}; font-weight:600; margin-left:12px;">
+                                ¥{s.price:.2f} {s.change_pct:+.2f}%
+                            </span>
+                            <span style="color:var(--text-secondary); margin-left:8px; font-size:0.85em;">
+                                量比{s.vol_ratio:.1f} 成交{s.amount_wan/10000:.1f}亿{v10_tag}
+                            </span>
                         </div>
-                        <div style="display:flex; flex-wrap:wrap; gap:20px; font-size:0.9em; margin-bottom:8px;">
-                            <span style="color:var(--text-secondary);">买入 <b style="color:var(--text-primary);">¥{entry:.2f}</b></span>
-                            <span style="color:var(--text-secondary);">止损 <b style="color:#00c853;">¥{stop:.2f}（{stop_pct}）</b></span>
-                            <span style="color:var(--text-secondary);">目标 <b style="color:#ff4b4b;">¥{target:.2f}（{target_pct}）</b></span>
-                            <span style="color:var(--text-secondary);">仓位 <b style="color:var(--text-primary);">{position}</b></span>
-                            <span style="color:var(--text-secondary);">盈亏比 <b style="color:var(--text-primary);">{rr}</b></span>
+                        <div style="display:flex; gap:8px; align-items:center;">
+                            <span style="background:#ff4b4b; color:#fff; padding:3px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">✅ 可进场</span>
+                            <span style="color:#ff6b35; font-weight:700;">{s.total_score:.0f}分</span>
+                            {sec_tag}
                         </div>
-                        {f'<div style="color:var(--text-secondary); font-size:0.82em;">💡 {reason}</div>' if reason else ''}
                     </div>
-                    """)
+                    <div style="display:flex; flex-wrap:wrap; gap:20px; font-size:0.9em; margin-bottom:8px;">
+                        <span style="color:var(--text-secondary);">位置 <b style="color:var(--text-primary);">{s.score_position:.0f}/25</b></span>
+                        <span style="color:var(--text-secondary);">高开 <b style="color:var(--text-primary);">{s.score_open:.0f}/25</b></span>
+                        <span style="color:var(--text-secondary);">量能 <b style="color:var(--text-primary);">{s.score_volume:.0f}/25</b></span>
+                        <span style="color:var(--text-secondary);">板块 <b style="color:var(--text-primary);">{s.score_sector:.0f}/25</b></span>
+                        <span style="color:var(--text-secondary);">流通 <b style="color:var(--text-primary);">{s.circulation:.0f}亿</b></span>
+                    </div>
+                    <div style="color:#ff6b35; font-size:0.85em;">⏰ {s.action_reason}</div>
+                </div>
+                """)
 
-            # 观察池简要
-            if watch_list:
-                st.html(f'<h3 style="color:var(--text-primary);">👁️ 观察 · {len(watch_list)}只</h3>')
-                watch_rows = []
-                for s in watch_list:
-                    rec, signal_type, action = rec_cache.get(s.code, (None, "", "观察"))
-                    score = rec.total_score if rec else 0
-                    v10_tag = " 📌V10" if s.in_v10 else ""
+        # ===== 👁️ 观察 =====
+        if watch_list:
+            st.html(f'<h2>👁️ 观察 · 等15分钟看走势 · {len(watch_list)}只</h2>')
+            for s in watch_list:
+                v10_tag = " 📌V10" if s.in_v10 else ""
+                chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-secondary)"
+                st.html(
+                    f'<span style="display:inline-block; margin:2px 4px; padding:6px 10px; '
+                    f'background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; font-size:0.85em;">'
+                    f'<b>{s.name}</b> <span style="color:var(--text-secondary);">{s.code}</span> '
+                    f'<span style="color:{chg_color};">{s.change_pct:+.2f}%</span> '
+                    f'<span style="color:var(--text-secondary);">量比{s.vol_ratio:.1f}</span> '
+                    f'<span style="color:#ffab40; font-weight:600;">{s.total_score:.0f}分</span>'
+                    f'<span style="color:var(--text-secondary); font-size:0.85em;">{v10_tag}</span>'
+                    f'<div style="font-size:0.8em; color:var(--text-secondary); margin-top:2px;">{s.action_reason}</div>'
+                    f'</span>'
+                )
+
+        # ===== ❌ 放弃（折叠）=====
+        if drop_list:
+            with st.expander(f"❌ 放弃 · {len(drop_list)}只", expanded=False):
+                for s in drop_list:
                     chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-secondary)"
-                    watch_rows.append(
-                        f'<span style="display:inline-block; margin:2px 4px; padding:3px 8px; '
-                        f'background:var(--bg-card); border:1px solid var(--border-color); border-radius:6px; font-size:0.85em;">'
-                        f'{s.name} <span style="color:var(--text-secondary);">{s.code}</span> '
-                        f'<span style="color:{chg_color};">{s.change_pct:+.2f}%</span> '
-                        f'<span style="color:var(--text-secondary); font-size:0.85em;">{signal_type}{v10_tag} {score:.0f}分</span>'
-                        f'</span>'
+                    st.html(
+                        f'<div style="font-size:0.85em; color:var(--text-secondary); padding:2px 0;">'
+                        f'{s.name}({s.code}) <span style="color:{chg_color};">{s.change_pct:+.2f}%</span> '
+                        f'量比{s.vol_ratio:.1f} {s.total_score:.0f}分 — {s.action_reason}'
+                        f'</div>'
                     )
-                st.html("".join(watch_rows))
 
+        # ===== V10交叉重点（仅展示有V10信号的）=====
+        v10_stocks = [s for s in stocks if s.in_v10]
+        if v10_stocks:
             st.divider()
-
-        # ===== V10交叉重点 =====
-        v10_cross = [s for s in stocks if s.in_v10]
-        if v10_cross:
-            st.html(f'<h2>📌 V10交叉印证 ({len(v10_cross)}只)</h2>')
-            for s in v10_cross:
-                rec, signal_type, action = rec_cache.get(s.code, (None, None, "不建议"))
-                sector_tag = f"<span class='tag tag-up'>🔥{s.sector}</span>" if s.sector_hot else f"<span class='tag tag-info'>{s.sector}</span>"
-                vibe_tags = " ".join([f"<span class='tag tag-info'>{t}</span>" for t in s.vibe_tags])
-
+            st.html(f'<h2>📌 V10交叉印证 · {len(v10_stocks)}只</h2>')
+            st.caption("以下股票同时命中V10信号和竞价异动，信号确认度更高")
+            for s in v10_stocks:
+                chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-primary)"
                 # 进场标签
-                if action == "可进场":
+                if s.action == "可进场":
                     action_html = '<span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">✅ 可进场</span>'
-                elif action == "观察":
+                elif s.action == "观察":
                     action_html = '<span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">👁️ 观察</span>'
                 else:
                     action_html = ""
@@ -380,87 +297,63 @@ if st.session_state.get("auction_scanned"):
                         <div>
                             <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{s.code}</span>
                             <span style="color:var(--text-secondary); margin-left:8px;">{s.name}</span>
-                            <span class="tag tag-accent" style="margin-left:8px;">V10+{s.strategy}</span>
+                            <span class="tag tag-accent" style="margin-left:8px;">V10+竞价</span>
                             {action_html}
                         </div>
                         <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
-                            <span style="color:#ff4b4b; font-weight:600;">+{s.change_pct}%</span>
-                            <span style="color:var(--text-secondary);">量比 <span style="color:var(--text-primary); font-weight:600;">{s.vol_ratio}</span></span>
-                            <span style="color:var(--text-secondary);">成交额 <span style="color:var(--text-primary); font-weight:600;">{s.amount_wan/10000:.1f}亿</span></span>
-                            <span style="color:var(--text-secondary);">Vibe <span style="color:#ff6b35; font-weight:600;">{s.vibe_score}/4</span></span>
-                            {sector_tag} {vibe_tags}
+                            <span style="color:{chg_color}; font-weight:600;">{s.change_pct:+.2f}%</span>
+                            <span style="color:var(--text-secondary);">量比 <span style="color:var(--text-primary); font-weight:600;">{s.vol_ratio:.1f}</span></span>
+                            <span style="color:var(--text-secondary);">成交 <span style="color:var(--text-primary); font-weight:600;">{s.amount_wan/10000:.1f}亿</span></span>
+                            <span style="color:#ff6b35; font-weight:600;">{s.total_score:.0f}分</span>
                         </div>
                     </div>
                 </div>
                 """)
-                _render_recommendation_card(rec, signal_type, action)
+                _render_auction_card(s)
 
-        # ===== 三策略结果 =====
-        for strat_name, strat_emoji in [("趋势共振", "🔥"), ("游资爆量V1", "🎯"), ("游资竞价V2", "💎")]:
-            strat_stocks = [s for s in stocks if s.strategy == strat_name]
-            st.html(f'<h2>{strat_emoji} {strat_name} ({len(strat_stocks)}只)</h2>')
-            if not strat_stocks:
-                st.caption("  - 无符合条件的股票")
-            else:
-                for s in strat_stocks:
-                    rec, signal_type, action = rec_cache.get(s.code, (None, None, "不建议"))
-                    v10_tag = "<span class='tag tag-accent' style='margin-left:6px;'>📌V10</span>" if s.in_v10 else ""
-                    sector_tag = f"<span class='tag tag-up'>🔥{s.sector}</span>" if s.sector_hot else f"<span class='tag tag-info'>{s.sector}</span>"
-                    vibe_tags = " ".join([f"<span class='tag tag-info'>{t}</span>" for t in s.vibe_tags])
-
-                    # 进场标签
-                    if action == "可进场":
-                        action_html = '<span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700; margin-left:6px;">✅ 可进场</span>'
-                    elif action == "观察":
-                        action_html = '<span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700; margin-left:6px;">👁️ 观察</span>'
-                    else:
-                        action_html = ""
-
+        # ===== 全部结果明细（折叠）=====
+        all_stocks = [s for s in stocks if s.action != "放弃"]
+        if all_stocks:
+            with st.expander("📋 全部候选明细", expanded=False):
+                for s in all_stocks:
+                    chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-secondary)"
+                    v10_tag = " 📌V10" if s.in_v10 else ""
                     st.html(f"""
-                    <div class="scan-result-card">
-                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-                            <div>
-                                <span style="font-weight:700; color:var(--text-primary);">{s.code}</span>
-                                <span style="color:var(--text-secondary); margin-left:8px;">{s.name}</span>
-                                {v10_tag}
-                                {action_html}
-                            </div>
-                            <div style="display:flex; gap:16px; align-items:center; flex-wrap:wrap;">
-                                <span style="color:#ff4b4b; font-weight:600;">+{s.change_pct}%</span>
-                                <span style="color:var(--text-secondary);">量比 <span style="color:var(--text-primary);">{s.vol_ratio}</span></span>
-                                <span style="color:var(--text-secondary);">成交额 <span style="color:var(--text-primary);">{s.amount_wan/10000:.1f}亿</span></span>
-                                <span style="color:var(--text-secondary);">换手 <span style="color:var(--text-primary);">{s.turnover}%</span></span>
-                                <span style="color:var(--text-secondary);">Vibe <span style="color:#ff6b35;">{s.vibe_score}</span></span>
-                                {sector_tag} {vibe_tags}
-                            </div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-color); font-size:0.9em;">
+                        <div>
+                            <b>{s.name}</b> <span style="color:var(--text-secondary);">{s.code}</span>{v10_tag}
+                            <span style="color:{chg_color}; margin-left:8px;">{s.change_pct:+.2f}%</span>
+                        </div>
+                        <div style="display:flex; gap:12px; color:var(--text-secondary);">
+                            <span>位置{s.score_position:.0f}</span>
+                            <span>高开{s.score_open:.0f}</span>
+                            <span>量能{s.score_volume:.0f}</span>
+                            <span>板块{s.score_sector:.0f}</span>
+                            <span style="color:#ff6b35; font-weight:600;">{s.total_score:.0f}分</span>
                         </div>
                     </div>
                     """)
-                    _render_recommendation_card(rec, signal_type, action)
 
         # ===== 操作区 =====
         st.divider()
         action_cols = st.columns(3)
         with action_cols[0]:
-            st.info("💡 扫描结果可一键添加到**💼 持仓管理**页面跟踪盈亏和止盈止损")
+            st.info("💡 竞价进场方式：<b>开盘后等回调介入</b>，不是竞价直接买。小幅高开+放量+低位+板块共振是最优组合。")
         with action_cols[1]:
-            if st.button("📤 发送到飞书", width='stretch'):
+            if st.button("📤 发送到飞书", key="auction_feishu_btn", width='stretch'):
                 from core.alerts import send_signal_alert
                 success_count = 0
-                for s in stocks[:10]:
-                    signal_type, _ = _auction_signal_type(s.strategy, s.vibe_score, s.in_v10, s.sector_hot)
+                for s in buy_list[:5]:
                     detail = (
-                        f"竞价{signal_type} | 量比{s.vol_ratio} | "
-                        f"成交额{s.amount_wan/10000:.1f}亿 | "
-                        f"Vibe{s.vibe_score}/4 | "
-                        f"板块:{s.sector}{'🔥' if s.sector_hot else ''} | "
-                        f"V10:{'✅' if s.in_v10 else '❌'}"
+                        f"竞价可进场 | 位置{s.score_position:.0f}/25 高开{s.score_open:.0f}/25 "
+                        f"量能{s.score_volume:.0f}/25 板块{s.score_sector:.0f}/25 | "
+                        f"总分{s.total_score:.0f} | {s.action_reason}"
                     )
-                    if send_signal_alert(s.code, s.name, f"竞价-{s.strategy}", s.price, detail):
+                    if send_signal_alert(s.code, s.name, f"竞价进场", s.price, detail):
                         success_count += 1
                 if success_count > 0:
                     st.success(f"已发送 {success_count} 只到飞书！")
                 else:
                     st.warning("发送失败，请检查Webhook配置")
         with action_cols[2]:
-            st.caption(f"⏱ 耗时{stats['elapsed']}秒 | 全市场{stats['total_scanned']}只 | 竞价选股v7引擎 + 6维评分")
+            st.caption(f"竞价4维评分 v2 | 候选{stats.get('total_candidates', 0)}只")
