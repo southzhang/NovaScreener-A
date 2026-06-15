@@ -190,8 +190,59 @@ def _fetch_eastmoney_vol_ratio(codes: list) -> dict:
     return results
 
 
+def _is_trading_hours() -> bool:
+    """判断当前是否应该拼接今日K线（9:15-16:30，含盘后）"""
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return False
+    t = now.hour * 100 + now.minute
+    return (915 <= t <= 1130) or (1300 <= t <= 1630)
+
+
+def _append_today_bar_to_sina(data: list, code: str) -> list:
+    """盘中用腾讯实时行情拼一条当日K线到新浪K线数据末尾
+    
+    新浪日K线盘中不更新，导致均量/涨幅等指标滞后。
+    用腾讯实时行情的OHLCV拼一条当日K线。
+    """
+    if not _is_trading_hours() or not data:
+        return data
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    # 检查最后一条是否已经是今天
+    if data[-1].get("day", "").startswith(today_str):
+        return data
+    # 获取腾讯实时行情
+    prefix = "sh" if code.startswith("6") else "sz"
+    try:
+        url = f"https://qt.gtimg.cn/q={prefix}{code}"
+        raw = _fetch_url(url, timeout=5)
+        if not raw or "=" not in raw:
+            return data
+        parts = raw.split("=")[1].strip('";\n').split("~")
+        if len(parts) < 40:
+            return data
+        price = float(parts[3]) if parts[3] else 0
+        if price <= 0:
+            return data
+        vol = float(parts[36]) if parts[36] else 0  # 成交量(手)
+        if vol <= 0:
+            return data  # 还没成交
+        today_bar = {
+            "day": today_str,
+            "open": parts[5] if parts[5] else str(price),
+            "high": parts[33] if parts[33] else str(price),
+            "low": parts[34] if parts[34] else str(price),
+            "close": str(price),
+            "volume": str(vol),  # 手（与新浪K线一致）
+        }
+        data.append(today_bar)
+    except Exception:
+        pass
+    return data
+
+
 def _fetch_recent_avg_amount(code: str, days: int = 5) -> float:
-    """获取近N日平均成交额(万) — 用于竞价量能比较"""
+    """获取近N日平均成交额(万) — 用于竞价量能比较（盘中自动拼接今日数据）"""
     prefix = "sh" if code.startswith("6") else "sz"
     symbol = f"{prefix}{code}"
     # 新浪K线取近5日
@@ -203,6 +254,8 @@ def _fetch_recent_avg_amount(code: str, days: int = 5) -> float:
         data = json.loads(raw)
         if not isinstance(data, list) or len(data) < 2:
             return 0
+        # 盘中拼接今日K线
+        data = _append_today_bar_to_sina(data, code)
         amounts = []
         for bar in data[-days:]:
             vol = float(bar.get('volume', 0))
@@ -215,7 +268,7 @@ def _fetch_recent_avg_amount(code: str, days: int = 5) -> float:
 
 
 def _fetch_position_20d(code: str) -> float:
-    """计算近20日涨幅(%) — 判断位置高低"""
+    """计算近20日涨幅(%) — 判断位置高低（盘中自动拼接今日数据）"""
     prefix = "sh" if code.startswith("6") else "sz"
     symbol = f"{prefix}{code}"
     url = f"https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={symbol}&scale=240&ma=no&datalen=25"
@@ -225,6 +278,10 @@ def _fetch_position_20d(code: str) -> float:
             return 0
         data = json.loads(raw)
         if not isinstance(data, list) or len(data) < 21:
+            return 0
+        # 盘中拼接今日K线
+        data = _append_today_bar_to_sina(data, code)
+        if len(data) < 21:
             return 0
         close_20d_ago = float(data[-21].get('close', 0))
         close_today = float(data[-1].get('close', 0))
