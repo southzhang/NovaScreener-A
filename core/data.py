@@ -230,20 +230,85 @@ def akshare_klines(code: str, days: int = 250) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _is_trading_hours() -> bool:
+    """判断当前是否应该拼接今日K线
+    
+    覆盖范围：
+    - 9:15-11:30 集合竞价+上午盘
+    - 13:00-15:00 下午盘
+    - 15:00-16:30 盘后（新浪K线可能还没更新当天数据）
+    
+    周末不拼。节假日无法判断，靠新浪K线是否已有当天数据兜底。
+    """
+    from datetime import datetime
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return False
+    t = now.hour * 100 + now.minute
+    return (915 <= t <= 1130) or (1300 <= t <= 1630)
+
+
+def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
+    """盘中用腾讯实时行情拼一条当日K线到日K线末尾
+    
+    新浪日K线盘中不更新（只到上一交易日收盘），
+    导致均线/趋势/信号全部滞后。用腾讯实时行情的
+    开高低收+成交量拼一条当日K线，让V10信号反映今天。
+    
+    非交易时段或行情获取失败时原样返回。
+    """
+    if not _is_trading_hours():
+        return df
+    if df.empty:
+        return df
+    # 检查最后一条是否已经是今天
+    today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+    last_date = df["date"].iloc[-1]
+    if isinstance(last_date, str):
+        last_date = pd.Timestamp(last_date)
+    if last_date.strftime("%Y-%m-%d") == today_str:
+        return df  # 已有今天数据
+    
+    quote = get_realtime_quote(code)
+    if not quote or not quote.get("price") or quote["price"] <= 0:
+        return df
+    
+    # 成交量换算：腾讯返回"手"，新浪K线用"股"，需 ×100
+    vol = quote.get("volume", 0)
+    if vol <= 0:
+        return df  # 没有成交量说明还没成交
+    
+    today_bar = pd.DataFrame([{
+        "date": pd.Timestamp(today_str),
+        "open": quote["open"],
+        "high": quote["high"],
+        "low": quote["low"],
+        "close": quote["price"],
+        "volume": float(vol) * 100,  # 手→股
+    }])
+    
+    return pd.concat([df, today_bar], ignore_index=True)
+
+
 def get_stock_history(code: str, days: int = 250) -> pd.DataFrame:
     """获取K线（新浪优先，腾讯降级，akshare兜底）
     
     优先级变更：2026-06 腾讯 web.ifzq.gtimg.cn/fqkline 被WAF封禁返回501，
     新浪财经K线API成为首选数据源。
+    
+    盘中自动拼接当日K线（来自腾讯实时行情），确保信号实时。
     """
     df = sina_klines(code, days)
     if not df.empty and len(df) >= 20:
+        df = _append_today_kline(df, code)
         return df
     df = tencent_klines(code, days)
     if not df.empty and len(df) >= 20:
+        df = _append_today_kline(df, code)
         return df
     df = akshare_klines(code, days)
     if not df.empty and len(df) >= 20:
+        df = _append_today_kline(df, code)
         return df
     return pd.DataFrame()
 
