@@ -64,17 +64,17 @@ def get_realtime(code):
 
 
 # ── K线振幅分位 ───────────────────────────────────────────
-def _is_trading_hours() -> bool:
-    """判断当前是否应该拼接今日K线（9:15-16:30，含盘后）"""
-    now = datetime.now()
-    if now.weekday() >= 5:
-        return False
-    t = now.hour * 100 + now.minute
-    return (915 <= t <= 1130) or (1300 <= t <= 1630)
+def _is_trading_day() -> bool:
+    """判断今天是否可能是交易日（工作日）
+    
+    简单判断：周一至周五。法定节假日无法精确判断，
+    但腾讯行情有成交量>0可兜底。
+    """
+    return datetime.now().weekday() < 5
 
 
 def get_amplitude_percentile(code):
-    """计算当前振幅在近30日的分位数(0-100)（盘中自动拼接今日数据）"""
+    """计算当前振幅在近30日的分位数(0-100)（盘中/盘后自动拼接今日数据）"""
     prefix = "sh" if code.startswith("6") else "sz"
     symbol = f"{prefix}{code}"
     url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={symbol},day,,,30,qfq"
@@ -88,13 +88,12 @@ def get_amplitude_percentile(code):
         return None
     if len(klines) < 5:
         return None
-    # 盘中拼接今日K线（腾讯K线盘中也可能滞后）
-    if _is_trading_hours():
+    # 盘中/盘后拼接今日K线（只要当天有成交就拼，不限时段）
+    if _is_trading_day():
         today_str = datetime.now().strftime("%Y-%m-%d")
         if not klines[-1][0].startswith(today_str):
-            # 用腾讯实时行情拼今日振幅
             rt = get_realtime(code)
-            if rt and rt.get("high", 0) > 0 and rt.get("low", 0) > 0:
+            if rt and rt.get("high", 0) > 0 and rt.get("low", 0) > 0 and rt.get("volume", 0) > 0:
                 today_bar = [today_str, str(rt["open"]), str(rt["high"]),
                              str(rt["low"]), str(rt["price"]), str(rt.get("volume", 0))]
                 klines.append(today_bar)

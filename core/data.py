@@ -230,36 +230,35 @@ def akshare_klines(code: str, days: int = 250) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def _is_trading_hours() -> bool:
-    """判断当前是否应该拼接今日K线
+def _is_trading_day() -> bool:
+    """判断今天是否可能是交易日（工作日）
     
-    覆盖范围：
-    - 9:15-11:30 集合竞价+上午盘
-    - 13:00-15:00 下午盘
-    - 15:00-16:30 盘后（新浪K线可能还没更新当天数据）
-    
-    周末不拼。节假日无法判断，靠新浪K线是否已有当天数据兜底。
+    简单判断：周一至周五。法定节假日无法精确判断，
+    但腾讯行情有成交量>0可兜底。
     """
     from datetime import datetime
-    now = datetime.now()
-    if now.weekday() >= 5:
-        return False
-    t = now.hour * 100 + now.minute
-    return (915 <= t <= 1130) or (1300 <= t <= 1630)
+    return datetime.now().weekday() < 5
 
 
 def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
-    """盘中用腾讯实时行情拼一条当日K线到日K线末尾
+    """盘中/盘后用腾讯实时行情拼一条当日K线到日K线末尾
     
     新浪日K线盘中不更新（只到上一交易日收盘），
     导致均线/趋势/信号全部滞后。用腾讯实时行情的
     开高低收+成交量拼一条当日K线，让V10信号反映今天。
     
-    非交易时段或行情获取失败时原样返回。
+    拼接条件（宽松策略，宁可多拼不可漏拼）：
+    1. 今天是工作日（周末不需要拼）
+    2. 新浪K线最后一条不是今天（避免重复）
+    3. 腾讯实时行情有成交量>0（确认今天确实有交易）
+    
+    旧版只在9:15-16:30拼接，午休11:30-13:00和盘后都不拼，
+    导致午休/盘后扫描的信号全是昨天的。新版只要当天有成交
+    就拼，无论什么时间段。
     """
-    if not _is_trading_hours():
-        return df
     if df.empty:
+        return df
+    if not _is_trading_day():
         return df
     # 检查最后一条是否已经是今天
     today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
@@ -267,7 +266,7 @@ def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
     if isinstance(last_date, str):
         last_date = pd.Timestamp(last_date)
     if last_date.strftime("%Y-%m-%d") == today_str:
-        return df  # 已有今天数据
+        return df  # 已有今天数据（腾讯K线可能直接返回今天）
     
     quote = get_realtime_quote(code)
     if not quote or not quote.get("price") or quote["price"] <= 0:
@@ -276,7 +275,7 @@ def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
     # 成交量换算：腾讯返回"手"，新浪K线用"股"，需 ×100
     vol = quote.get("volume", 0)
     if vol <= 0:
-        return df  # 没有成交量说明还没成交
+        return df  # 没有成交量说明还没成交（节假日/非交易日）
     
     today_bar = pd.DataFrame([{
         "date": pd.Timestamp(today_str),

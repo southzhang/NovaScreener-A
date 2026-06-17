@@ -190,22 +190,25 @@ def _fetch_eastmoney_vol_ratio(codes: list) -> dict:
     return results
 
 
-def _is_trading_hours() -> bool:
-    """判断当前是否应该拼接今日K线（9:15-16:30，含盘后）"""
-    now = datetime.now()
-    if now.weekday() >= 5:
-        return False
-    t = now.hour * 100 + now.minute
-    return (915 <= t <= 1130) or (1300 <= t <= 1630)
+def _is_trading_day() -> bool:
+    """判断今天是否可能是交易日（工作日）
+    
+    简单判断：周一至周五。法定节假日无法精确判断，
+    但腾讯行情有成交量>0可兜底。
+    """
+    return datetime.now().weekday() < 5
 
 
 def _append_today_bar_to_sina(data: list, code: str) -> list:
-    """盘中用腾讯实时行情拼一条当日K线到新浪K线数据末尾
+    """盘中/盘后用腾讯实时行情拼一条当日K线到新浪K线数据末尾
     
     新浪日K线盘中不更新，导致均量/涨幅等指标滞后。
     用腾讯实时行情的OHLCV拼一条当日K线。
+    
+    旧版只在9:15-16:30拼接，午休和盘后信号全是昨天的。
+    新版只要当天有成交就拼，无论什么时间段。
     """
-    if not _is_trading_hours() or not data:
+    if not data or not _is_trading_day():
         return data
     today_str = datetime.now().strftime("%Y-%m-%d")
     # 检查最后一条是否已经是今天
