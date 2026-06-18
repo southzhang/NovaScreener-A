@@ -145,7 +145,7 @@ if watchlist:
                 row=1, col=1,
             )
 
-            for ma, color, name in [(5, "#FFD700", "MA5"), (10, "#FF69B4", "MA10"), (20, "#00BFFF", "MA20")]:
+            for ma, color, name in [(5, "var(--warning-color)", "MA5"), (10, "var(--accent)", "MA10"), (20, "var(--info-color)", "MA20")]:
                 col = f"ma{ma}"
                 if col in hist.columns:
                     fig.add_trace(
@@ -153,7 +153,7 @@ if watchlist:
                         row=1, col=1,
                     )
 
-            colors = ["#ef5350" if c >= o else "#26a69a" for c, o in zip(hist["close"], hist["open"])]
+            colors = ["var(--up-color)" if c >= o else "var(--down-color)" for c, o in zip(hist["close"], hist["open"])]
             fig.add_trace(
                 go.Bar(x=hist["date"], y=hist["volume"], name="成交量", marker_color=colors),
                 row=2, col=1,
@@ -165,11 +165,11 @@ if watchlist:
                 height=600, xaxis_rangeslider_visible=False,
                 template="plotly_dark" if _is_dark else "plotly_white", showlegend=True,
                 margin=dict(l=50, r=50, t=30, b=30),
-                paper_bgcolor="#0a0e17" if _is_dark else "#ffffff",
-                plot_bgcolor="#0f1520" if _is_dark else "#f8f9fb",
-                font=dict(color="#c8cdd8" if _is_dark else "#0f1419"),
+                paper_bgcolor="var(--bg-primary)" if _is_dark else "var(--bg-card)",
+                plot_bgcolor="var(--bg-card)" if _is_dark else "var(--bg-primary)",
+                font=dict(color="var(--border-color)" if _is_dark else "var(--text-primary)"),
             )
-            _grid = "#1e2d40" if _is_dark else "#e2e8f0"
+            _grid = "var(--sidebar-border)" if _is_dark else "var(--border-color)"
             fig.update_xaxes(type="category", nticks=20, gridcolor=_grid)
             fig.update_yaxes(gridcolor=_grid)
             st.plotly_chart(fig, width='stretch')

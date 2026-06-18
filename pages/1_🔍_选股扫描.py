@@ -21,7 +21,7 @@ st.html('<h2 style="margin-top:0;">🏆 V10 策略引擎</h2>')
 with st.expander("📖 V10 策略详解", expanded=False):
     st.html("""
     <div style="color:var(--text-secondary); line-height:1.8;">
-    <strong style="color:#ff6b35;">V10 全买入公式</strong> — 七条件共振，宁缺毋滥：<br><br>
+    <strong style="color:var(--accent);">V10 全买入公式</strong> — 七条件共振，宁缺毋滥：<br><br>
     <table style="width:100%; border-collapse:collapse;">
     <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">🏔️ 隧道多头</td><td style="color:var(--text-secondary);">收盘价 > EMA(120) > EMA(200)</td></tr>
     <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">📈 双线定式</td><td style="color:var(--text-secondary);">EMA(5) > EMA(20) 且上升</td></tr>
@@ -33,10 +33,10 @@ with st.expander("📖 V10 策略详解", expanded=False):
     <tr><td style="padding:6px 0;">📊 MACD金叉</td><td style="color:var(--text-secondary);">DIF(20,80) 上穿 DEA(9)</td></tr>
     </table>
     <br>
-    <strong style="color:#ff6b35;">6维综合评分（100分制）：</strong><br>
+    <strong style="color:var(--accent);">6维综合评分（100分制）：</strong><br>
     V10信号级别 30分 | 基本面(ROE) 15分 | 资金面 20分 | 振幅分位 15分 | 板块风口 10分 | 追高风险 10分
     <br><br>
-    <strong style="color:#ff6b35;">信号分级：</strong><br>
+    <strong style="color:var(--accent);">信号分级：</strong><br>
     <span class="tag tag-up">🔴 全买入</span> 所有条件满足（最强）→ 强推80+分<br>
     <span class="tag tag-accent">🟠 强庄买</span> 缺MACD金叉 → 关注60+分<br>
     <span class="tag tag-info">🟡 基础买</span> 缺强庄信号 → 观察40+分
@@ -146,13 +146,13 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
         ts = rec.trailing_stop
         loss_pct = (rec.current_price - rec.stop_loss) / rec.current_price * 100
         gain1_pct = (rec.target_1 - rec.current_price) / rec.current_price * 100
-        rr_color = "#00c853" if rec.risk_reward >= 2.0 else "#ffab40" if rec.risk_reward >= 1.5 else "#ff4b4b"
+        rr_color = "var(--down-color)" if rec.risk_reward >= 2.0 else "var(--warning-color)" if rec.risk_reward >= 1.5 else "var(--up-color)"
 
         st.html(f"""
         <div style="display:flex; gap:8px; flex-wrap:wrap; padding:8px 0; font-size:0.82em;">
             <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
                 <div style="color:var(--text-secondary); font-size:0.8em;">📊 总分</div>
-                <div style="font-weight:700; color:#ff6b35;">{rec.total_score}分</div>
+                <div style="font-weight:700; color:var(--accent);">{rec.total_score}分</div>
             </div>
             <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
                 <div style="color:var(--text-secondary); font-size:0.8em;">🎯 入场</div>
@@ -160,13 +160,13 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
             </div>
             <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
                 <div style="color:var(--text-secondary); font-size:0.8em;">🛑 止损</div>
-                <div style="font-weight:700; color:#00c853;">¥{rec.stop_loss}</div>
-                <div style="color:#00c853; font-size:0.85em;">-{loss_pct:.1f}%</div>
+                <div style="font-weight:700; color:var(--down-color);">¥{rec.stop_loss}</div>
+                <div style="color:var(--down-color); font-size:0.85em;">-{loss_pct:.1f}%</div>
             </div>
             <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
                 <div style="color:var(--text-secondary); font-size:0.8em;">📈 目标</div>
-                <div style="font-weight:700; color:#ff4b4b;">¥{rec.target_1}</div>
-                <div style="color:#ff4b4b; font-size:0.85em;">+{gain1_pct:.1f}%</div>
+                <div style="font-weight:700; color:var(--up-color);">¥{rec.target_1}</div>
+                <div style="color:var(--up-color); font-size:0.85em;">+{gain1_pct:.1f}%</div>
             </div>
             <div style="flex:1; min-width:70px; text-align:center; background:var(--bg-card); border-radius:6px; padding:6px 4px;">
                 <div style="color:var(--text-secondary); font-size:0.8em;">盈亏比</div>
@@ -282,19 +282,19 @@ def _render_results(results):
             signal_type = r.get("signal_type", "基础买")
             if signal_type == "全买入":
                 emoji = "🔴"
-                border_color = "#ff4b4b"
+                border_color = "var(--up-color)"
             elif signal_type == "强庄买":
                 emoji = "🟠"
-                border_color = "#ffab40"
+                border_color = "var(--warning-color)"
             else:
                 emoji = "🟡"
-                border_color = "#42a5f5"
+                border_color = "var(--info-color)"
 
             # 实时行情
             _q = _quotes.get(r['code'], {})
             _cur = _q.get('price', 0)
             _pct = _q.get('pct_change', 0)
-            _pct_color = "#ef4444" if _pct > 0 else "#22c55e" if _pct < 0 else "var(--text-secondary)"
+            _pct_color = "var(--up-color)" if _pct > 0 else "var(--down-color)" if _pct < 0 else "var(--text-secondary)"
             _pct_str = f"{_pct:+.2f}%" if _pct else "-"
             _cur_str = f"¥{_cur:.2f}" if _cur else "-"
             # PE/市值/涨跌停
@@ -309,9 +309,9 @@ def _render_results(results):
             if _limit_up > 0 and _cur > 0:
                 _pct_to_limit = (_limit_up - _cur) / _cur * 100
                 if _pct_to_limit < 2:
-                    _extra_parts.append(f"<span style='color:#ef4444;'>距涨停{_pct_to_limit:.1f}%</span>")
+                    _extra_parts.append(f"<span style='color:var(--up-color);'>距涨停{_pct_to_limit:.1f}%</span>")
                 elif _cur >= _limit_up:
-                    _extra_parts.append("<span style='color:#ef4444;'>已涨停</span>")
+                    _extra_parts.append("<span style='color:var(--up-color);'>已涨停</span>")
             _extra_html = " · ".join(_extra_parts) if _extra_parts else ""
 
             # 先渲染推荐详情，拿到rec对象（统一评分来源，避免标签和详情矛盾）
@@ -327,13 +327,13 @@ def _render_results(results):
                 _hold_days = rec.hold_days
                 # 标签颜色映射
                 if "强烈" in rec.level:
-                    _level_bg = "#ff4b4b"
+                    _level_bg = "var(--up-color)"
                 elif "关注" in rec.level:
-                    _level_bg = "#ffab40"
+                    _level_bg = "var(--warning-color)"
                 elif "观察" in rec.level:
-                    _level_bg = "#b39700"
+                    _level_bg = "var(--warning-color)"
                 else:
-                    _level_bg = "#888888"
+                    _level_bg = "var(--text-muted)"
             else:
                 # 推荐引擎失败时的降级
                 _score_display = f"{r.get('score', 0)}分"
@@ -341,16 +341,16 @@ def _render_results(results):
                 _total_score = r.get("score", 0)
                 if _total_score >= 80 or (signal_type == "全买入" and _total_score >= 60):
                     _badge_text = "🔴 强烈建议买入"
-                    _level_bg = "#ff4b4b"
+                    _level_bg = "var(--up-color)"
                 elif _total_score >= 60 or (signal_type == "强庄买" and _total_score >= 50):
                     _badge_text = "🟠 建议买入"
-                    _level_bg = "#ffab40"
+                    _level_bg = "var(--warning-color)"
                 elif _total_score >= 40:
                     _badge_text = "🟡 继续观察"
-                    _level_bg = "#b39700"
+                    _level_bg = "var(--warning-color)"
                 else:
                     _badge_text = "⚪ 暂不推荐"
-                    _level_bg = "#888888"
+                    _level_bg = "var(--text-muted)"
 
             _hold_display = f'<span style="color:var(--text-secondary); font-size:0.85em; margin-left:6px;">{_hold_days}</span>' if _hold_days and _hold_days != "-" else ''
 
@@ -361,7 +361,7 @@ def _render_results(results):
                         <span style="font-size:1.2em; margin-right:4px;">{emoji}</span>
                         <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{r['code']}</span>
                         <span style="color:var(--text-secondary); margin-left:8px;">{r['name']}</span>
-                        <span style="color:#ff6b35; margin-left:12px; font-weight:600;">¥{r['price']}</span>
+                        <span style="color:var(--accent); margin-left:12px; font-weight:600;">¥{r['price']}</span>
                         <span style="color:var(--text-muted); margin-left:4px;">→</span>
                         <span style="color:var(--text-primary); margin-left:4px; font-weight:600;">{_cur_str}</span>
                         <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
@@ -369,7 +369,7 @@ def _render_results(results):
                     <div style="display:flex; gap:10px; align-items:center;">
                         <span style="background:{_level_bg}; color:#fff; padding:2px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">{_badge_text}</span>
                         <span class="tag tag-accent">{signal_type}</span>
-                        <span style="color:#ff6b35; font-weight:700;">{_score_display}</span>
+                        <span style="color:var(--accent); font-weight:700;">{_score_display}</span>
                         {_hold_display}
                         <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
                     </div>
@@ -397,7 +397,7 @@ def _render_results(results):
             _q = _quotes_pb.get(r['code'], {})
             _cur = _q.get('price', 0)
             _pct = _q.get('pct_change', 0)
-            _pct_color = "#ef4444" if _pct > 0 else "#22c55e" if _pct < 0 else "var(--text-secondary)"
+            _pct_color = "var(--up-color)" if _pct > 0 else "var(--down-color)" if _pct < 0 else "var(--text-secondary)"
             _pct_str = f"{_pct:+.2f}%" if _pct else "-"
             _cur_str = f"¥{_cur:.2f}" if _cur else "-"
             # PE/市值/涨跌停
@@ -412,9 +412,9 @@ def _render_results(results):
             if _limit_up > 0 and _cur > 0:
                 _pct_to_limit = (_limit_up - _cur) / _cur * 100
                 if _pct_to_limit < 2:
-                    _pb_parts.append(f"<span style='color:#ef4444;'>距涨停{_pct_to_limit:.1f}%</span>")
+                    _pb_parts.append(f"<span style='color:var(--up-color);'>距涨停{_pct_to_limit:.1f}%</span>")
                 elif _cur >= _limit_up:
-                    _pb_parts.append("<span style='color:#ef4444;'>已涨停</span>")
+                    _pb_parts.append("<span style='color:var(--up-color);'>已涨停</span>")
             _pb_extra = " · ".join(_pb_parts) if _pb_parts else ""
 
             # 先渲染推荐详情，拿rec对象
@@ -429,35 +429,35 @@ def _render_results(results):
                 _pb_score_display = f"{_pb_rec.total_score:.0f}分"
                 _pb_hold = _pb_rec.hold_days
                 if "强烈" in _pb_rec.level:
-                    _pb_level_bg = "#ff4b4b"
+                    _pb_level_bg = "var(--up-color)"
                 elif "关注" in _pb_rec.level:
-                    _pb_level_bg = "#ffab40"
+                    _pb_level_bg = "var(--warning-color)"
                 elif "观察" in _pb_rec.level:
-                    _pb_level_bg = "#b39700"
+                    _pb_level_bg = "var(--warning-color)"
                 else:
-                    _pb_level_bg = "#888888"
+                    _pb_level_bg = "var(--text-muted)"
             else:
                 _pb_badge = r.get('level', '基础买')
                 _pb_score_display = f"{r['score']}分"
                 _pb_hold = ""
-                _pb_level_bg = "#ab47bc"
+                _pb_level_bg = "var(--info-color)"
 
             _pb_hold_display = f'<span style="color:var(--text-secondary); font-size:0.85em; margin-left:6px;">{_pb_hold}</span>' if _pb_hold and _pb_hold != "-" else ''
 
             st.html(f"""
-            <div class="scan-result-card" style="border-left:4px solid #ab47bc;">
+            <div class="scan-result-card" style="border-left:4px solid var(--info-color);">
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                     <div>
                         <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{r['code']}</span>
                         <span style="color:var(--text-secondary); margin-left:8px;">{r['name']}</span>
-                        <span style="color:#ff6b35; margin-left:12px; font-weight:600;">¥{r['price']}</span>
+                        <span style="color:var(--accent); margin-left:12px; font-weight:600;">¥{r['price']}</span>
                         <span style="color:var(--text-muted); margin-left:4px;">→</span>
                         <span style="color:var(--text-primary); margin-left:4px; font-weight:600;">{_cur_str}</span>
                         <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>
                     </div>
                     <div style="display:flex; gap:10px; align-items:center;">
                         <span style="background:{_pb_level_bg}; color:#fff; padding:2px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">{_pb_badge}</span>
-                        <span style="color:#ff6b35; font-weight:700;">{_pb_score_display}</span>
+                        <span style="color:var(--accent); font-weight:700;">{_pb_score_display}</span>
                         {_pb_hold_display}
                         <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r['tags'][:4])}</span>
                     </div>
@@ -485,7 +485,7 @@ def _render_results(results):
             _q = _quotes_cl.get(r['code'], {})
             _cur = _q.get('price', 0)
             _pct = _q.get('pct_change', 0)
-            _pct_color = "#ef4444" if _pct > 0 else "#22c55e" if _pct < 0 else "var(--text-secondary)"
+            _pct_color = "var(--up-color)" if _pct > 0 else "var(--down-color)" if _pct < 0 else "var(--text-secondary)"
             _pct_str = f"{_pct:+.2f}%" if _pct else "-"
             _cur_str = f"¥{_cur:.2f}" if _cur else "-"
 
@@ -495,7 +495,7 @@ def _render_results(results):
                     <div>
                         <span style="font-weight:700; color:var(--text-primary);">{r['code']}</span>
                         <span style="color:var(--text-secondary); margin-left:8px;">{r['name']}</span>
-                        <span style="color:#ff6b35; margin-left:12px;">¥{r['price']}</span>
+                        <span style="color:var(--accent); margin-left:12px;">¥{r['price']}</span>
                         <span style="color:var(--text-muted); margin-left:4px;">→</span>
                         <span style="color:var(--text-primary); margin-left:4px; font-weight:600;">{_cur_str}</span>
                         <span style="color:{_pct_color}; margin-left:6px; font-weight:600;">{_pct_str}</span>

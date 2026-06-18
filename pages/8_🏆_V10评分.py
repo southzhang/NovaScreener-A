@@ -18,10 +18,10 @@ with st.expander("📊 评分维度详解"):
     st.html("""
     <div style="color:var(--text-secondary); line-height:1.8;">
     <table style="width:100%; border-collapse:collapse;">
-    <tr style="border-bottom:2px solid #ff6b3540;">
-        <th style="padding:8px 0; color:#ff6b35; text-align:left;">维度</th>
-        <th style="padding:8px 0; color:#ff6b35; text-align:left;">权重</th>
-        <th style="padding:8px 0; color:#ff6b35; text-align:left;">说明</th>
+    <tr style="border-bottom:2px solid var(--accent)40;">
+        <th style="padding:8px 0; color:var(--accent); text-align:left;">维度</th>
+        <th style="padding:8px 0; color:var(--accent); text-align:left;">权重</th>
+        <th style="padding:8px 0; color:var(--accent); text-align:left;">说明</th>
     </tr>
     <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:8px 0;">V10技术信号</td><td>40分</td><td style="color:var(--text-secondary);">隧道+通道+QW+强庄+MACD+放量</td></tr>
     <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:8px 0;">波段回调</td><td>25分</td><td style="color:var(--text-secondary);">EMA20/50/120 + RSI + MACD</td></tr>
@@ -30,7 +30,7 @@ with st.expander("📊 评分维度详解"):
     <tr><td style="padding:8px 0;">趋势强度</td><td>10分</td><td style="color:var(--text-secondary);">EMA多头排列 + 通道间距</td></tr>
     </table>
     <br>
-    <strong style="color:#ff6b35;">推荐等级：</strong><br>
+    <strong style="color:var(--accent);">推荐等级：</strong><br>
     <span class="tag tag-up">🔴 强烈推荐</span> ≥80分 &nbsp;
     <span class="tag tag-accent">🟠 值得关注</span> 60-79分 &nbsp;
     <span class="tag tag-info">🟡 观察等待</span> 40-59分 &nbsp;
@@ -85,9 +85,9 @@ def _build_extra_info(price: float, extras: dict) -> str:
     if limit_up > 0 and price > 0:
         pct_to_limit = (limit_up - price) / price * 100
         if pct_to_limit < 2:
-            parts.append(f"<span style='color:#ef4444;'>距涨停{pct_to_limit:.1f}%</span>")
+            parts.append(f"<span style='color:var(--up-color);'>距涨停{pct_to_limit:.1f}%</span>")
         elif price >= limit_up:
-            parts.append("<span style='color:#ef4444;'>已涨停</span>")
+            parts.append("<span style='color:var(--up-color);'>已涨停</span>")
     return " · ".join(parts)
 
 
@@ -153,11 +153,11 @@ if st.button("🚀 开始评分", type="primary", width='stretch') and codes:
                         <div>
                             <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{r.code}</span>
                             <span style="color:var(--text-secondary); margin-left:8px;">{r.name}</span>
-                            <span style="color:#ff6b35; margin-left:12px; font-weight:600;">¥{r.price:.2f}</span>
+                            <span style="color:var(--accent); margin-left:12px; font-weight:600;">¥{r.price:.2f}</span>
                             <span style="color:var(--text-secondary); margin-left:8px;">{r.pct_change:+.1f}%</span>
                         </div>
                         <div style="display:flex; gap:16px; align-items:center;">
-                            <span style="color:#ff4b4b; font-weight:700; font-size:1.2em;">{r.total_score}分</span>
+                            <span style="color:var(--up-color); font-weight:700; font-size:1.2em;">{r.total_score}分</span>
                             <span style="color:var(--text-secondary);">V10:<span style="color:var(--text-primary);">{r.v10_score}</span> 回调:<span style="color:var(--text-primary);">{r.pullback_score}</span></span>
                             <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r.tags[:3])}</span>
                         </div>
@@ -174,16 +174,16 @@ if st.button("🚀 开始评分", type="primary", width='stretch') and codes:
                 _ex = _quote_extras.get(r.code, {})
                 _info = _build_extra_info(r.price, _ex)
                 st.html(f"""
-                <div class="scan-result-card" style="border-left:4px solid #ffab40;">
+                <div class="scan-result-card" style="border-left:4px solid var(--warning-color);">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
                         <div>
                             <span style="font-weight:700; color:var(--text-primary);">{r.code}</span>
                             <span style="color:var(--text-secondary); margin-left:8px;">{r.name}</span>
-                            <span style="color:#ff6b35; margin-left:12px;">¥{r.price:.2f}</span>
+                            <span style="color:var(--accent); margin-left:12px;">¥{r.price:.2f}</span>
                             <span style="color:var(--text-secondary); margin-left:8px;">{r.pct_change:+.1f}%</span>
                         </div>
                         <div style="display:flex; gap:16px; align-items:center;">
-                            <span style="color:#ffab40; font-weight:700; font-size:1.1em;">{r.total_score}分</span>
+                            <span style="color:var(--warning-color); font-weight:700; font-size:1.1em;">{r.total_score}分</span>
                             <span style="color:var(--text-secondary);">V10:<span style="color:var(--text-primary);">{r.v10_score}</span> 回调:<span style="color:var(--text-primary);">{r.pullback_score}</span></span>
                             <span style="color:var(--text-secondary); font-size:0.85em;">{" ".join(r.tags[:3])}</span>
                         </div>

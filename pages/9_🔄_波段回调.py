@@ -15,12 +15,12 @@ render_page_header("🔄 波段回调入场识别", "在V10趋势基础上，识
 with st.expander("📖 策略详解"):
     st.html("""
     <div style="color:var(--text-secondary); line-height:1.8;">
-    <strong style="color:#ff6b35;">核心逻辑：</strong><br>
+    <strong style="color:var(--accent);">核心逻辑：</strong><br>
     1. <strong>主趋势向上</strong>: EMA20 > EMA50 > EMA120（多头排列）<br>
     2. <strong>价格回调到支撑区</strong>: 接近EMA20或EMA50<br>
     3. <strong>缩量回调</strong>: 近3日成交量 < 20日均量 × 0.8<br>
     4. <strong>动量未死</strong>: RSI(14) > 40, MACD未死叉<br><br>
-    <strong style="color:#ff6b35;">评分标准（0-8分）：</strong><br>
+    <strong style="color:var(--accent);">评分标准（0-8分）：</strong><br>
     <span class="tag tag-up">⭐ 优质入场</span> ≥6分 &nbsp;
     <span class="tag tag-info">🟡 观察等待</span> 4-5分 &nbsp;
     <span class="tag" style="background:#5a657720; color:var(--text-muted); border:1px solid #5a657740;">🔴 暂不推荐</span> &lt;4分
@@ -170,16 +170,16 @@ if st.button("🔍 扫描回调机会", type="primary", width='stretch') and cod
             for r in star:
                 tags_html = " ".join([f"<span class='tag tag-info'>{t}</span>" for t in r['标签'].split()])
                 st.html(f"""
-                <div class="scan-result-card" style="border-left:4px solid #ffab40;">
+                <div class="scan-result-card" style="border-left:4px solid var(--warning-color);">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                         <div>
                             <span style="font-weight:700; color:var(--text-primary);">{r['代码']}</span>
                             <span style="color:var(--text-secondary); margin-left:8px;">{r['名称']}</span>
-                            <span style="color:#ff6b35; margin-left:12px;">{r['价格']}</span>
+                            <span style="color:var(--accent); margin-left:12px;">{r['价格']}</span>
                             <span style="color:var(--text-secondary); margin-left:8px;">{r['涨跌幅']}</span>
                         </div>
                         <div style="display:flex; gap:12px; align-items:center;">
-                            <span style="color:#ffab40; font-weight:700; font-size:1.1em;">{r['评分']}分</span>
+                            <span style="color:var(--warning-color); font-weight:700; font-size:1.1em;">{r['评分']}分</span>
                             <span style="color:var(--text-secondary);">{r['距EMA20']}</span>
                             <span style="color:var(--text-secondary);">RSI {r['RSI']}</span>
                             {tags_html}
@@ -199,10 +199,10 @@ if st.button("🔍 扫描回调机会", type="primary", width='stretch') and cod
                         <div>
                             <span style="font-weight:700; color:var(--text-primary);">{r['代码']}</span>
                             <span style="color:var(--text-secondary); margin-left:8px;">{r['名称']}</span>
-                            <span style="color:#ff6b35; margin-left:12px;">{r['价格']}</span>
+                            <span style="color:var(--accent); margin-left:12px;">{r['价格']}</span>
                         </div>
                         <div style="display:flex; gap:12px; align-items:center;">
-                            <span style="color:#42a5f5; font-weight:700;">{r['评分']}分</span>
+                            <span style="color:var(--info-color); font-weight:700;">{r['评分']}分</span>
                             <span style="color:var(--text-secondary);">{r['距EMA20']}</span>
                             <span style="color:var(--text-secondary);">RSI {r['RSI']}</span>
                             {tags_html}

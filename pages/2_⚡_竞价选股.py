@@ -21,12 +21,12 @@ render_page_header("⚡ 竞价选股", "09:25竞价结束 → 4维评分 → 开
 with st.expander("📖 竞价4维评分说明"):
     st.html("""
     <div style="color:var(--text-secondary); line-height:1.8;">
-    <p style="color:#ff6b35; font-weight:700; font-size:1.05em;">竞价选股 ≠ 盘中选股，竞价看的是开盘前的信号质量</p>
+    <p style="color:var(--accent); font-weight:700; font-size:1.05em;">竞价选股 ≠ 盘中选股，竞价看的是开盘前的信号质量</p>
     <table style="width:100%; border-collapse:collapse; margin:8px 0;">
-    <tr style="border-bottom:2px solid #ff6b3540;">
-        <th style="padding:8px 0; color:#ff6b35; text-align:left; width:25%;">维度</th>
-        <th style="padding:8px 0; color:#ff6b35; text-align:left; width:15%;">满分</th>
-        <th style="padding:8px 0; color:#ff6b35; text-align:left;">评分逻辑</th>
+    <tr style="border-bottom:2px solid var(--accent)40;">
+        <th style="padding:8px 0; color:var(--accent); text-align:left; width:25%;">维度</th>
+        <th style="padding:8px 0; color:var(--accent); text-align:left; width:15%;">满分</th>
+        <th style="padding:8px 0; color:var(--accent); text-align:left;">评分逻辑</th>
     </tr>
     <tr style="border-bottom:1px solid var(--border-color);">
         <td style="padding:8px 0;">📍 位置</td>
@@ -50,9 +50,9 @@ with st.expander("📖 竞价4维评分说明"):
     </tr>
     </table>
     <br>
-    <p><span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">✅ 可进场</span>
+    <p><span style="background:var(--up-color); color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">✅ 可进场</span>
     四维均达标 + 总分≥65 → <b>开盘5分钟等回调介入</b></p>
-    <p><span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">👁️ 观察</span>
+    <p><span style="background:var(--warning-color); color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">👁️ 观察</span>
     有亮点但有短板 → <b>等15分钟看走势再决定</b></p>
     <p><span style="background:#888; color:#fff; padding:2px 8px; border-radius:4px; font-weight:700;">❌ 放弃</span>
     多维不足 → <b>不追</b></p>
@@ -66,13 +66,13 @@ def _score_bar_html(score: float, max_score: float, label: str, desc: str) -> st
     """渲染单个维度评分条"""
     pct = score / max_score if max_score > 0 else 0
     if pct >= 0.8:
-        color = "#00c853"
+        color = "var(--down-color)"
         icon = "🟢"
     elif pct >= 0.6:
-        color = "#ffab40"
+        color = "var(--warning-color)"
         icon = "🟡"
     elif pct > 0:
-        color = "#ff4b4b"
+        color = "var(--up-color)"
         icon = "🟠"
     else:
         color = "#888"
@@ -122,8 +122,8 @@ def _render_auction_card(s: AuctionStock):
             <span>{sec_desc}</span>
             {'<span>📌V10交叉</span>' if s.in_v10 else ''}
         </div>
-        <div style="font-size:0.82em; color:#ff6b35; margin-top:4px;">{action_hint}</div>
-        {'<div style="font-size:0.78em; color:#ef5350; margin-top:2px;">⚠️ ' + ' · '.join(s.missing_data) + '</div>' if s.missing_data else ''}
+        <div style="font-size:0.82em; color:var(--accent); margin-top:4px;">{action_hint}</div>
+        {'<div style="font-size:0.78em; color:var(--up-color); margin-top:2px;">⚠️ ' + ' · '.join(s.missing_data) + '</div>' if s.missing_data else ''}
     </div>
     """)
 
@@ -180,10 +180,10 @@ if st.session_state.get("auction_scanned"):
         sum_cols = st.columns(6)
         sum_items = [
             ("📊 扫描", f"{stats.get('total_scanned', 0)}只", "var(--text-primary)"),
-            ("🎯 候选", f"{stats.get('total_candidates', 0)}只", "#ff6b35"),
-            ("✅ 可进场", f"{len(buy_list)}只", "#ff4b4b"),
-            ("👁️ 观察", f"{len(watch_list)}只", "#ffab40"),
-            ("📌 V10交叉", f"{stats.get('v10_cross', 0)}只", "#42a5f5"),
+            ("🎯 候选", f"{stats.get('total_candidates', 0)}只", "var(--accent)"),
+            ("✅ 可进场", f"{len(buy_list)}只", "var(--up-color)"),
+            ("👁️ 观察", f"{len(watch_list)}只", "var(--warning-color)"),
+            ("📌 V10交叉", f"{stats.get('v10_cross', 0)}只", "var(--info-color)"),
             ("⏱️ 耗时", f"{stats.get('elapsed', 0)}秒", "var(--text-secondary)"),
         ]
         for col, (label, value, color) in zip(sum_cols, sum_items):
@@ -211,12 +211,12 @@ if st.session_state.get("auction_scanned"):
             st.html('<h2>✅ 可进场 · 开盘5分钟等回调介入</h2>')
             for s in buy_list:
                 v10_tag = " 📌V10交叉" if s.in_v10 else ""
-                chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-primary)"
+                chg_color = "var(--up-color)" if s.change_pct > 0 else "var(--down-color)" if s.change_pct < 0 else "var(--text-primary)"
                 sec_tag = f"<span class='tag tag-up'>🔥{s.sector}</span>" if s.sector_hot else f"<span class='tag tag-info'>{s.sector}</span>" if s.sector else ""
 
                 st.html(f"""
                 <div style="background:var(--bg-card); border:1px solid var(--border-color);
-                            border-left:4px solid #ff4b4b; border-radius:10px;
+                            border-left:4px solid var(--up-color); border-radius:10px;
                             padding:16px 20px; margin-bottom:12px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
                         <div>
@@ -230,8 +230,8 @@ if st.session_state.get("auction_scanned"):
                             </span>
                         </div>
                         <div style="display:flex; gap:8px; align-items:center;">
-                            <span style="background:#ff4b4b; color:#fff; padding:3px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">✅ 可进场</span>
-                            <span style="color:#ff6b35; font-weight:700;">{s.total_score:.0f}分</span>
+                            <span style="background:var(--up-color); color:#fff; padding:3px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">✅ 可进场</span>
+                            <span style="color:var(--accent); font-weight:700;">{s.total_score:.0f}分</span>
                             {sec_tag}
                         </div>
                     </div>
@@ -242,8 +242,8 @@ if st.session_state.get("auction_scanned"):
                         <span style="color:var(--text-secondary);">板块 <b style="color:var(--text-primary);">{s.score_sector:.0f}/25</b></span>
                         <span style="color:var(--text-secondary);">流通 <b style="color:var(--text-primary);">{s.circulation:.0f}亿</b></span>
                     </div>
-                    <div style="color:#ff6b35; font-size:0.85em;">⏰ {s.action_reason}</div>
-                    {'<div style="color:#ef5350; font-size:0.8em; margin-top:2px;">⚠️ 数据不完整: ' + ' · '.join(s.missing_data) + '</div>' if s.missing_data else ''}
+                    <div style="color:var(--accent); font-size:0.85em;">⏰ {s.action_reason}</div>
+                    {'<div style="color:var(--up-color); font-size:0.8em; margin-top:2px;">⚠️ 数据不完整: ' + ' · '.join(s.missing_data) + '</div>' if s.missing_data else ''}
                 </div>
                 """)
 
@@ -253,16 +253,16 @@ if st.session_state.get("auction_scanned"):
             st.html(f'<h2>📌 V10交叉印证 · {len(v10_stocks)}只</h2>')
             st.caption("以下股票同时命中V10信号和竞价异动，信号确认度更高")
             for s in v10_stocks:
-                chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-primary)"
+                chg_color = "var(--up-color)" if s.change_pct > 0 else "var(--down-color)" if s.change_pct < 0 else "var(--text-primary)"
                 if s.action == "可进场":
-                    action_html = '<span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">✅ 可进场</span>'
+                    action_html = '<span style="background:var(--up-color); color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">✅ 可进场</span>'
                 elif s.action == "观察":
-                    action_html = '<span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">👁️ 观察</span>'
+                    action_html = '<span style="background:var(--warning-color); color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">👁️ 观察</span>'
                 else:
                     action_html = ""
 
                 st.html(f"""
-                <div class="scan-result-card" style="border-left:4px solid #42a5f5;">
+                <div class="scan-result-card" style="border-left:4px solid var(--info-color);">
                     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
                         <div>
                             <span style="font-weight:700; color:var(--text-primary); font-size:1.05em;">{s.name}</span>
@@ -274,7 +274,7 @@ if st.session_state.get("auction_scanned"):
                             <span style="color:{chg_color}; font-weight:600;">{s.change_pct:+.2f}%</span>
                             <span style="color:var(--text-secondary);">量比 <span style="color:var(--text-primary); font-weight:600;">{s.vol_ratio:.1f}</span></span>
                             <span style="color:var(--text-secondary);">成交 <span style="color:var(--text-primary); font-weight:600;">{s.amount_wan/10000:.1f}亿</span></span>
-                            <span style="color:#ff6b35; font-weight:600;">{s.total_score:.0f}分</span>
+                            <span style="color:var(--accent); font-weight:600;">{s.total_score:.0f}分</span>
                         </div>
                     </div>
                 </div>
@@ -286,14 +286,14 @@ if st.session_state.get("auction_scanned"):
             st.html(f'<h2>👁️ 观察 · 等15分钟看走势 · {len(watch_list)}只</h2>')
             for s in watch_list:
                 v10_tag = " 📌V10" if s.in_v10 else ""
-                chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-secondary)"
+                chg_color = "var(--up-color)" if s.change_pct > 0 else "var(--down-color)" if s.change_pct < 0 else "var(--text-secondary)"
                 st.html(
                     f'<span style="display:inline-block; margin:2px 4px; padding:6px 10px; '
                     f'background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; font-size:0.85em;">'
                     f'<b>{s.name}</b> <span style="color:var(--text-secondary);">{s.code}</span> '
                     f'<span style="color:{chg_color};">{s.change_pct:+.2f}%</span> '
                     f'<span style="color:var(--text-secondary);">量比{s.vol_ratio:.1f}</span> '
-                    f'<span style="color:#ffab40; font-weight:600;">{s.total_score:.0f}分</span>'
+                    f'<span style="color:var(--warning-color); font-weight:600;">{s.total_score:.0f}分</span>'
                     f'<span style="color:var(--text-secondary); font-size:0.85em;">{v10_tag}</span>'
                     f'<div style="font-size:0.8em; color:var(--text-secondary); margin-top:2px;">{s.action_reason}</div>'
                     f'</span>'
@@ -303,7 +303,7 @@ if st.session_state.get("auction_scanned"):
         if drop_list:
             with st.expander(f"❌ 放弃 · {len(drop_list)}只", expanded=False):
                 for s in drop_list:
-                    chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-secondary)"
+                    chg_color = "var(--up-color)" if s.change_pct > 0 else "var(--down-color)" if s.change_pct < 0 else "var(--text-secondary)"
                     st.html(
                         f'<div style="font-size:0.85em; color:var(--text-secondary); padding:2px 0;">'
                         f'{s.name}({s.code}) <span style="color:{chg_color};">{s.change_pct:+.2f}%</span> '
@@ -316,7 +316,7 @@ if st.session_state.get("auction_scanned"):
         if all_stocks:
             with st.expander("📋 全部候选明细", expanded=False):
                 for s in all_stocks:
-                    chg_color = "#ff4b4b" if s.change_pct > 0 else "#00c853" if s.change_pct < 0 else "var(--text-secondary)"
+                    chg_color = "var(--up-color)" if s.change_pct > 0 else "var(--down-color)" if s.change_pct < 0 else "var(--text-secondary)"
                     v10_tag = " 📌V10" if s.in_v10 else ""
                     st.html(f"""
                     <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 0; border-bottom:1px solid var(--border-color); font-size:0.9em;">
@@ -329,7 +329,7 @@ if st.session_state.get("auction_scanned"):
                             <span>高开{s.score_open:.0f}</span>
                             <span>量能{s.score_volume:.0f}</span>
                             <span>板块{s.score_sector:.0f}</span>
-                            <span style="color:#ff6b35; font-weight:600;">{s.total_score:.0f}分</span>
+                            <span style="color:var(--accent); font-weight:600;">{s.total_score:.0f}分</span>
                         </div>
                     </div>
                     """)

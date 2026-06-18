@@ -17,8 +17,8 @@ for key in get_strategy_names():
     with st.expander(f"📊 {info['name']} ({key})"):
         st.html(f"""
         <div style="color:var(--text-secondary); line-height:1.8;">
-        <strong style="color:#ff6b35;">说明</strong>: {info['desc']}<br>
-        <strong style="color:#ff6b35;">默认参数</strong>:
+        <strong style="color:var(--accent);">说明</strong>: {info['desc']}<br>
+        <strong style="color:var(--accent);">默认参数</strong>:
         </div>
         """)
         st.json(info.get("default_params", {}))
@@ -125,11 +125,11 @@ if st.button("运行回测") and test_code:
             height=500, template="plotly_dark" if _is_dark else "plotly_white",
             title=f"{test_code} - {strategy_info['name']} 回测",
             xaxis_rangeslider_visible=False,
-            paper_bgcolor="#0a0e17" if _is_dark else "#ffffff",
-            plot_bgcolor="#0f1520" if _is_dark else "#f8f9fb",
-            font=dict(color="#c8cdd8" if _is_dark else "#0f1419"),
+            paper_bgcolor="var(--bg-primary)" if _is_dark else "var(--bg-card)",
+            plot_bgcolor="var(--bg-card)" if _is_dark else "var(--bg-primary)",
+            font=dict(color="var(--border-color)" if _is_dark else "var(--text-primary)"),
         )
-        _grid = "#1e2d40" if _is_dark else "#e2e8f0"
+        _grid = "var(--sidebar-border)" if _is_dark else "var(--border-color)"
         fig.update_xaxes(gridcolor=_grid)
         fig.update_yaxes(gridcolor=_grid)
         st.plotly_chart(fig, width='stretch')

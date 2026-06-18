@@ -65,10 +65,10 @@ for i, key in enumerate(INDEX_ORDER):
     amount = idx.get("amount", 0)
 
     if pct > 0:
-        color = "#ff4b4b"
+        color = "var(--up-color)"
         arrow = "▲"
     elif pct < 0:
-        color = "#00c853"
+        color = "var(--down-color)"
         arrow = "▼"
     else:
         color = "var(--text-primary)"
@@ -119,14 +119,14 @@ if breadth and breadth.get("source") != "unavailable":
         st.html(f"""
         <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:10px; padding:14px 18px; margin-bottom:12px;">
             <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
-                <span style="font-weight:700; color:#ff4b4b;">🔴 上涨 {total_up}</span>
+                <span style="font-weight:700; color:var(--up-color);">🔴 上涨 {total_up}</span>
                 <span style="color:var(--text-secondary);">⬜ 平盘 {total_flat}</span>
-                <span style="font-weight:700; color:#00c853;">🟢 下跌 {total_down}</span>
+                <span style="font-weight:700; color:var(--down-color);">🟢 下跌 {total_down}</span>
             </div>
             <div style="display:flex; height:24px; border-radius:6px; overflow:hidden; background:var(--border-color);">
-                <div style="width:{up_pct:.1f}%; background:#ff4b4b; min-width:2px; border-radius:6px 0 0 6px;"></div>
+                <div style="width:{up_pct:.1f}%; background:var(--up-color); min-width:2px; border-radius:6px 0 0 6px;"></div>
                 <div style="width:{flat_pct:.1f}%; background:#888; min-width:1px;"></div>
-                <div style="width:{down_pct:.1f}%; background:#00c853; min-width:2px; border-radius:0 6px 6px 0;"></div>
+                <div style="width:{down_pct:.1f}%; background:var(--down-color); min-width:2px; border-radius:0 6px 6px 0;"></div>
             </div>
             <div style="display:flex; justify-content:space-between; margin-top:6px; font-size:0.82em; color:var(--text-secondary);">
                 <span>{up_pct:.1f}%</span>
@@ -151,9 +151,9 @@ if breadth and breadth.get("source") != "unavailable":
                 st.html(f"""
                 <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px; text-align:center;">
                     <div style="font-weight:600; color:var(--text-primary); margin-bottom:4px;">沪市 <span style="color:var(--text-secondary); font-weight:400;">{sh_total}家</span></div>
-                    <span style="color:#ff4b4b; font-weight:600;">{sh_up}涨</span>
+                    <span style="color:var(--up-color); font-weight:600;">{sh_up}涨</span>
                     <span style="color:var(--text-secondary); margin:0 6px;">{sh_flat}平</span>
-                    <span style="color:#00c853; font-weight:600;">{sh_down}跌</span>
+                    <span style="color:var(--down-color); font-weight:600;">{sh_down}跌</span>
                 </div>
                 """)
             with detail_cols[1]:
@@ -161,9 +161,9 @@ if breadth and breadth.get("source") != "unavailable":
                 st.html(f"""
                 <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:10px 14px; text-align:center;">
                     <div style="font-weight:600; color:var(--text-primary); margin-bottom:4px;">深市 <span style="color:var(--text-secondary); font-weight:400;">{sz_total}家</span></div>
-                    <span style="color:#ff4b4b; font-weight:600;">{sz_up}涨</span>
+                    <span style="color:var(--up-color); font-weight:600;">{sz_up}涨</span>
                     <span style="color:var(--text-secondary); margin:0 6px;">{sz_flat}平</span>
-                    <span style="color:#00c853; font-weight:600;">{sz_down}跌</span>
+                    <span style="color:var(--down-color); font-weight:600;">{sz_down}跌</span>
                 </div>
                 """)
         
@@ -182,8 +182,8 @@ if breadth and breadth.get("source") != "unavailable":
                     <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px 14px; text-align:center; font-size:0.9em;">
                         <span style="color:var(--text-primary);">创业板</span>
                         <span style="color:var(--text-secondary); margin-left:4px;">{cyb_total}家</span>
-                        <span style="color:#ff4b4b; margin-left:8px;">{cyb_up}涨</span>
-                        <span style="color:#00c853; margin-left:8px;">{cyb_down}跌</span>
+                        <span style="color:var(--up-color); margin-left:8px;">{cyb_up}涨</span>
+                        <span style="color:var(--down-color); margin-left:8px;">{cyb_down}跌</span>
                     </div>
                     """)
             if kc_up:
@@ -194,8 +194,8 @@ if breadth and breadth.get("source") != "unavailable":
                     <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px 14px; text-align:center; font-size:0.9em;">
                         <span style="color:var(--text-primary);">科创板</span>
                         <span style="color:var(--text-secondary); margin-left:4px;">{kc_total}家</span>
-                        <span style="color:#ff4b4b; margin-left:8px;">{kc_up}涨</span>
-                        <span style="color:#00c853; margin-left:8px;">{kc_down}跌</span>
+                        <span style="color:var(--up-color); margin-left:8px;">{kc_up}涨</span>
+                        <span style="color:var(--down-color); margin-left:8px;">{kc_down}跌</span>
                     </div>
                     """)
     elif breadth.get("total", 0) > 0:
@@ -234,8 +234,8 @@ def _freshness_badge(f: dict) -> tuple[str, str]:
     if not f.get("exists"):
         return "❌ 无数据", "var(--text-primary)"
     if f.get("fresh"):
-        return "✅ 新鲜", "#00c853"
-    return "⚠️ 过期", "#ffab40"
+        return "✅ 新鲜", "var(--down-color)"
+    return "⚠️ 过期", "var(--warning-color)"
 
 
 fresh_cols = st.columns(3)
@@ -270,9 +270,9 @@ prefetch_candidates = prefetch.get("candidates", {})
 prefetch_signals = prefetch.get("signals", {})
 
 SIGNAL_GROUPS = [
-    ("🔴 全买入", "full_buy", "#ff4b4b"),
-    ("🟠 强庄买", "strong_buy", "#ffab40"),
-    ("🟡 基础买", "base_buy", "#ffeb3b"),
+    ("🔴 全买入", "full_buy", "var(--up-color)"),
+    ("🟠 强庄买", "strong_buy", "var(--warning-color)"),
+    ("🟡 基础买", "base_buy", "var(--warning-color)"),
 ]
 
 signal_cols = st.columns(3)
@@ -336,10 +336,10 @@ for label, key, border_color in SIGNAL_GROUPS:
 
         # 涨跌色
         if change_pct > 0:
-            chg_color = "#ff4b4b"
+            chg_color = "var(--up-color)"
             chg_arrow = "▲"
         elif change_pct < 0:
-            chg_color = "#00c853"
+            chg_color = "var(--down-color)"
             chg_arrow = "▼"
         else:
             chg_color = "var(--text-primary)"
@@ -353,9 +353,9 @@ for label, key, border_color in SIGNAL_GROUPS:
         if rec:
             action = rec.get("action", "")
             if action == "推荐进场":
-                action_tag = '<span style="background:#ff4b4b; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">✅ 可进场</span>'
+                action_tag = '<span style="background:var(--up-color); color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">✅ 可进场</span>'
             elif action == "观察":
-                action_tag = '<span style="background:#ffab40; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">👁️ 观察</span>'
+                action_tag = '<span style="background:var(--warning-color); color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">👁️ 观察</span>'
             else:
                 action_tag = '<span style="background:#888; color:#fff; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:700;">❌ 不建议</span>'
             # 进场详情
@@ -399,7 +399,7 @@ for label, key, border_color in SIGNAL_GROUPS:
                 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
                     <span class="tag tag-accent">{signal}</span>
                     {f'<span class="tag tag-info">{vibe_str}</span>' if vibe_str else ''}
-                    {f'<span style="color:#00c853; font-size:0.85em;">{conf_str}</span>' if conf_str else ''}
+                    {f'<span style="color:var(--down-color); font-size:0.85em;">{conf_str}</span>' if conf_str else ''}
                     {action_tag}
                 </div>
             </div>
@@ -448,10 +448,10 @@ if rec_list or obs_list:
 
             # 涨跌色
             if change_pct > 0:
-                chg_color = "#ff4b4b"
+                chg_color = "var(--up-color)"
                 chg_arrow = "▲"
             elif change_pct < 0:
-                chg_color = "#00c853"
+                chg_color = "var(--down-color)"
                 chg_arrow = "▼"
             else:
                 chg_color = "var(--text-primary)"
@@ -459,7 +459,7 @@ if rec_list or obs_list:
 
             st.html(f"""
             <div style="background:var(--bg-card); border:1px solid var(--border-color);
-                        border-left:4px solid #ff4b4b; border-radius:10px;
+                        border-left:4px solid var(--up-color); border-radius:10px;
                         padding:16px 20px; margin-bottom:12px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px;">
                     <div>
@@ -470,15 +470,15 @@ if rec_list or obs_list:
                         </span>
                     </div>
                     <div style="display:flex; gap:8px; align-items:center;">
-                        <span style="background:#ff4b4b; color:#fff; padding:3px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">✅ 可进场</span>
+                        <span style="background:var(--up-color); color:#fff; padding:3px 10px; border-radius:4px; font-size:0.85em; font-weight:700;">✅ 可进场</span>
                         <span class="tag tag-accent">{sig}</span>
                         <span style="color:var(--text-secondary); font-size:0.85em;">评分 {score}</span>
                     </div>
                 </div>
                 <div style="display:flex; flex-wrap:wrap; gap:20px; font-size:0.9em; margin-bottom:8px;">
                     <span style="color:var(--text-secondary);">买入 <b style="color:var(--text-primary);">¥{entry:.2f}</b></span>
-                    <span style="color:var(--text-secondary);">止损 <b style="color:#ff4b4b;">¥{stop:.2f}（{stop_pct}）</b></span>
-                    <span style="color:var(--text-secondary);">目标 <b style="color:#00c853;">¥{target:.2f}（{target_pct}）</b></span>
+                    <span style="color:var(--text-secondary);">止损 <b style="color:var(--up-color);">¥{stop:.2f}（{stop_pct}）</b></span>
+                    <span style="color:var(--text-secondary);">目标 <b style="color:var(--down-color);">¥{target:.2f}（{target_pct}）</b></span>
                     <span style="color:var(--text-secondary);">仓位 <b style="color:var(--text-primary);">{position}</b></span>
                     <span style="color:var(--text-secondary);">盈亏比 <b style="color:var(--text-primary);">{rr}</b></span>
                 </div>
@@ -517,7 +517,7 @@ elif recommend.get("update_time"):
                 code = item.get("code", "")
                 sig = item.get("signal", "")
                 reason = item.get("reason", "")
-                st.html(f'<div style="margin-bottom:4px;"><span style="color:var(--text-secondary);">{name}({code})</span> <span class="tag tag-accent">{sig}</span> <span style="color:#ff4b4b; font-size:0.85em;">❌ {reason}</span></div>')
+                st.html(f'<div style="margin-bottom:4px;"><span style="color:var(--text-secondary);">{name}({code})</span> <span class="tag tag-accent">{sig}</span> <span style="color:var(--up-color); font-size:0.85em;">❌ {reason}</span></div>')
 
 # ===================================================================
 # 4. 候选股详情
@@ -543,10 +543,10 @@ else:
 
         # 涨跌色
         if change_pct > 0:
-            chg_color = "#ff4b4b"
+            chg_color = "var(--up-color)"
             chg_arrow = "▲"
         elif change_pct < 0:
-            chg_color = "#00c853"
+            chg_color = "var(--down-color)"
             chg_arrow = "▼"
         else:
             chg_color = "var(--text-primary)"
@@ -564,10 +564,10 @@ else:
         cf_value = capital_flow.get("value", 0) or 0
         cf_has = capital_flow.get("has_data", False)
         if cf_value > 0:
-            cf_color = "#ff4b4b"
+            cf_color = "var(--up-color)"
             cf_str = f"净流入 {cf_value / 1e4:.0f}万" if abs(cf_value) < 1e8 else f"净流入 {cf_value / 1e8:.2f}亿"
         elif cf_value < 0:
-            cf_color = "#00c853"
+            cf_color = "var(--down-color)"
             cf_str = f"净流出 {abs(cf_value) / 1e4:.0f}万" if abs(cf_value) < 1e8 else f"净流出 {abs(cf_value) / 1e8:.2f}亿"
         else:
             cf_color = "var(--text-secondary)"
@@ -579,11 +579,11 @@ else:
 
         # 信号等级边框色
         if signal == "全买入":
-            border_c = "#ff4b4b"
+            border_c = "var(--up-color)"
         elif signal == "强庄买":
-            border_c = "#ffab40"
+            border_c = "var(--warning-color)"
         elif signal == "基础买":
-            border_c = "#ffeb3b"
+            border_c = "var(--warning-color)"
         else:
             border_c = "var(--accent)"
 
@@ -622,7 +622,7 @@ else:
                 <span style="color:var(--text-secondary);">EMA20 <b style="color:var(--text-primary);">{_fmt_ema(ema20)}</b></span>
                 <span style="color:var(--text-secondary);">EMA120 <b style="color:var(--text-primary);">{_fmt_ema(ema120)}</b></span>
                 <span style="color:var(--text-secondary);">EMA200 <b style="color:var(--text-primary);">{_fmt_ema(ema200)}</b></span>
-                <span style="color:var(--text-secondary);">止损 <b style="color:#ff4b4b;">{_fmt_ema(stop_loss)}</b></span>
+                <span style="color:var(--text-secondary);">止损 <b style="color:var(--up-color);">{_fmt_ema(stop_loss)}</b></span>
             </div>
         </div>
         """)
@@ -658,7 +658,7 @@ else:
                 y="板块",
                 orientation="h",
                 color="涨跌幅",
-                color_continuous_scale=["#00c853", "#ffffff", "#ff4b4b"],
+                color_continuous_scale=["var(--down-color)", "var(--bg-card)", "var(--up-color)"],
             )
             fig.update_layout(
                 height=max(300, len(df_sectors) * 28),
@@ -677,7 +677,7 @@ else:
             # fallback: 用 HTML 条形图
             for _, row in df_sectors.iterrows():
                 pct = row["涨跌幅"]
-                color = "#ff4b4b" if pct >= 0 else "#00c853"
+                color = "var(--up-color)" if pct >= 0 else "var(--down-color)"
                 width = min(abs(pct) * 10, 100)
                 st.html(f"""
                 <div style="display:flex; align-items:center; gap:10px; margin-bottom:4px;">

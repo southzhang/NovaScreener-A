@@ -296,18 +296,43 @@ GLOBAL_CSS = """
     ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
     /* ========== 背景渐变 ========== */
-    :root .stApp, :root[data-theme="light"] .stApp { 
-        background: linear-gradient(180deg, #f8f9fb 0%, #eef1f5 100%); 
+    :root .stApp, :root[data-theme="light"] .stApp {
+        background: linear-gradient(180deg, #f8f9fb 0%, #eef1f5 100%);
     }
-    :root[data-theme="dark"] .stApp { 
-        background: linear-gradient(180deg, #0a0e17 0%, #111827 100%); 
+    :root[data-theme="dark"] .stApp {
+        background: linear-gradient(180deg, #0a0e17 0%, #111827 100%);
     }
-    :root[data-theme="light"] [data-testid="stSidebar"] { 
-        background: linear-gradient(180deg, #f1f3f5 0%, #e8ecf0 100%); 
+    :root[data-theme="light"] [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #f1f3f5 0%, #e8ecf0 100%);
     }
-    :root[data-theme="dark"] [data-testid="stSidebar"] { 
-        background: linear-gradient(180deg, #0d1320 0%, #111827 100%); 
+    :root[data-theme="dark"] [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0d1320 0%, #111827 100%);
     }
+
+    /* ========== 统一组件类（页面间共享） ========== */
+    .section-title { margin-top: 1.5rem; margin-bottom: 0.8rem; font-size: 1.15em; font-weight: 700; color: var(--text-primary); }
+    .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 10px 0; }
+    .v10-table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+    .v10-table th { padding: 8px 10px; text-align: left; color: var(--accent); font-weight: 600; font-size: 0.82em; border-bottom: 2px solid var(--accent); white-space: nowrap; }
+    .v10-table td { padding: 6px 10px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); font-size: 0.88em; }
+    .v10-table tr:hover td { background: var(--table-row-hover); }
+    .signal-badge { display: inline-block; padding: 2px 10px; border-radius: 6px; font-size: 0.78em; font-weight: 600; }
+    .signal-strong { background: var(--up-bg); color: var(--up-color); }
+    .signal-mid { background: var(--accent-soft); color: var(--accent); }
+    .signal-weak { background: color-mix(in srgb, var(--warning-color) 15%, transparent); color: var(--warning-color); }
+    .score-display { font-size: 1.3em; font-weight: 800; }
+    .score-high { color: var(--up-color); }
+    .score-mid { color: var(--accent); }
+    .score-low { color: var(--text-muted); }
+    .info-box { background: color-mix(in srgb, var(--info-color) 8%, var(--bg-card)); border-left: 3px solid var(--info-color); border-radius: 6px; padding: 10px 14px; margin: 8px 0; color: var(--text-primary); }
+    .warn-box { background: color-mix(in srgb, var(--warning-color) 8%, var(--bg-card)); border-left: 3px solid var(--warning-color); border-radius: 6px; padding: 10px 14px; margin: 8px 0; color: var(--text-primary); }
+    .empty-box { background: var(--bg-card); border: 1px dashed var(--border-color); border-radius: 10px; padding: 24px; text-align: center; color: var(--text-muted); }
+    .price-up { color: var(--up-color); font-weight: 600; }
+    .price-down { color: var(--down-color); font-weight: 600; }
+    .price-flat { color: var(--text-muted); }
+    .stApp p { margin-bottom: 0.5rem; }
+    .stExpander { margin-bottom: 0.8rem; }
+    .stExpander div[data-testid="stExpanderDetails"] { padding-top: 0.5rem; }
 </style>
 """
 
@@ -680,8 +705,42 @@ def inject_global_css():
     ::-webkit-scrollbar-thumb {{ background: var(--border-color); border-radius: 3px; }}
     ::-webkit-scrollbar-thumb:hover {{ background: var(--text-muted); }}
     /* ========== 背景渐变 ========== */
-    .stApp {{ background: {bg_gradient}; }}
-    [data-testid="stSidebar"] {{ background: {sidebar_gradient}; }}
+    .stApp { background: {bg_gradient}; }
+    [data-testid="stSidebar"] { background: {sidebar_gradient}; }
+
+    /* ========== 统一组件类（页面间共享） ========== */
+    /* 章节标题统一间距 */
+    .section-title { margin-top: 1.5rem; margin-bottom: 0.8rem; font-size: 1.15em; font-weight: 700; color: var(--text-primary); }
+    /* 信息卡片网格 */
+    .info-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 10px 0; }}
+    /* 统一表格表头 */
+    .v10-table {{ width: 100%; border-collapse: collapse; margin: 8px 0; }}
+    .v10-table th {{ padding: 8px 10px; text-align: left; color: var(--accent); font-weight: 600; font-size: 0.82em; border-bottom: 2px solid var(--accent); white-space: nowrap; }}
+    .v10-table td {{ padding: 6px 10px; border-bottom: 1px solid var(--border-color); color: var(--text-primary); font-size: 0.88em; }}
+    .v10-table tr:hover td {{ background: var(--table-row-hover); }}
+    /* 信号徽章 */
+    .signal-badge {{ display: inline-block; padding: 2px 10px; border-radius: 6px; font-size: 0.78em; font-weight: 600; }}
+    .signal-strong {{ background: var(--up-bg); color: var(--up-color); }}
+    .signal-mid {{ background: var(--accent-soft); color: var(--accent); }}
+    .signal-weak {{ background: color-mix(in srgb, var(--warning-color) 15%, transparent); color: var(--warning-color); }}
+    /* 分数显示 */
+    .score-display {{ font-size: 1.3em; font-weight: 800; }}
+    .score-high {{ color: var(--up-color); }}
+    .score-mid {{ color: var(--accent); }}
+    .score-low {{ color: var(--text-muted); }}
+    /* 提示框 */
+    .info-box {{ background: color-mix(in srgb, var(--info-color) 8%, var(--bg-card)); border-left: 3px solid var(--info-color); border-radius: 6px; padding: 10px 14px; margin: 8px 0; color: var(--text-primary); }}
+    .warn-box {{ background: color-mix(in srgb, var(--warning-color) 8%, var(--bg-card)); border-left: 3px solid var(--warning-color); border-radius: 6px; padding: 10px 14px; margin: 8px 0; color: var(--text-primary); }}
+    .empty-box {{ background: var(--bg-card); border: 1px dashed var(--border-color); border-radius: 10px; padding: 24px; text-align: center; color: var(--text-muted); }}
+    /* 价格/涨跌色 */
+    .price-up {{ color: var(--up-color); font-weight: 600; }}
+    .price-down {{ color: var(--down-color); font-weight: 600; }}
+    .price-flat {{ color: var(--text-muted); }}
+    /* 段落间距统一 */
+    .stApp p {{ margin-bottom: 0.5rem; }}
+    /* expander 内部间距 */
+    .stExpander {{ margin-bottom: 0.8rem; }}
+    .stExpander div[data-testid="stExpanderDetails"] {{ padding-top: 0.5rem; }}
     </style>
     """
     st.html(final_css)

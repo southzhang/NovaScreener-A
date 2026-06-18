@@ -116,7 +116,7 @@ else:
 
     # 汇总卡片
     pnl_pct = total_pnl / total_cost * 100 if total_cost > 0 else 0
-    s_color = "#ff4b4b" if total_pnl >= 0 else "#00c853"
+    s_color = "var(--up-color)" if total_pnl >= 0 else "var(--down-color)"
     s_arrow = "▲" if total_pnl >= 0 else "▼"
     win_cnt = len([p for p in positions if quotes.get(p['code'], {}).get('price', 0) > p['buy_price']])
     lose_cnt = len([p for p in positions if quotes.get(p['code'], {}).get('price', 0) < p['buy_price']])
@@ -206,15 +206,15 @@ else:
             risk_level = "🟢 安全"
 
         # 卡片颜色
-        pnl_color = "#ff4b4b" if pnl >= 0 else "#00c853"
-        chg_color = "#ff4b4b" if pct_change >= 0 else "#00c853"
+        pnl_color = "var(--up-color)" if pnl >= 0 else "var(--down-color)"
+        chg_color = "var(--up-color)" if pct_change >= 0 else "var(--down-color)"
         chg_arrow = "▲" if pct_change >= 0 else "▼"
         pnl_arrow = "▲" if pnl >= 0 else "▼"
 
         # 止损距离
         if stop_loss > 0:
             loss_from_stop = (current_price - stop_loss) / current_price * 100
-            stop_html = f"<span style='color:{('#ff4b4b' if loss_from_stop < 3 else 'var(--text-muted)')};'>¥{stop_loss} ({loss_from_stop:+.1f}%)</span>"
+            stop_html = f"<span style='color:{('var(--up-color)' if loss_from_stop < 3 else 'var(--text-muted)')};'>¥{stop_loss} ({loss_from_stop:+.1f}%)</span>"
         else:
             stop_html = "<span style='color:var(--text-muted);'>未设置</span>"
 
@@ -226,8 +226,8 @@ else:
 
         atr_html = f"<span style='color:var(--text-secondary);'>¥{trailing_info.atr_stop}</span>" if trailing_info else ""
 
-        risk_bg = "#ff4b4b10" if "触发" in risk_level or "跌停" in risk_level else "#ffab4010" if "预警" in risk_level or "涨停" in risk_level or "逼近" in risk_level else "var(--bg-card)"
-        risk_border = "#ff4b4b40" if "触发" in risk_level or "跌停" in risk_level else "#ffab4040" if "预警" in risk_level or "涨停" in risk_level or "逼近" in risk_level else "var(--border-color)"
+        risk_bg = "var(--up-color)10" if "触发" in risk_level or "跌停" in risk_level else "var(--warning-color)10" if "预警" in risk_level or "涨停" in risk_level or "逼近" in risk_level else "var(--bg-card)"
+        risk_border = "var(--up-color)40" if "触发" in risk_level or "跌停" in risk_level else "var(--warning-color)40" if "预警" in risk_level or "涨停" in risk_level or "逼近" in risk_level else "var(--border-color)"
 
         # 涨跌停距离
         limit_html = ""
@@ -235,10 +235,10 @@ else:
             limit_parts = []
             if limit_up > 0:
                 pct_to_up = (limit_up - current_price) / current_price * 100 if current_price > 0 else 0
-                limit_parts.append(f"<span style='color:#ff4b4b;'>涨停¥{limit_up:.2f}({pct_to_up:+.1f}%)</span>")
+                limit_parts.append(f"<span style='color:var(--up-color);'>涨停¥{limit_up:.2f}({pct_to_up:+.1f}%)</span>")
             if limit_down > 0:
                 pct_to_down = (current_price - limit_down) / current_price * 100 if current_price > 0 else 0
-                limit_parts.append(f"<span style='color:#00c853;'>跌停¥{limit_down:.2f}({pct_to_down:+.1f}%)</span>")
+                limit_parts.append(f"<span style='color:var(--down-color);'>跌停¥{limit_down:.2f}({pct_to_down:+.1f}%)</span>")
             limit_html = " · ".join(limit_parts)
 
         # PE/市值
@@ -309,16 +309,16 @@ else:
         # ===== 操作建议面板 =====
         if advisor:
             # 紧急程度颜色
-            urg_colors = {1: "#00c853", 2: "#42a5f5", 3: "#ffab40", 4: "#ff6b35", 5: "#ff4b4b"}
+            urg_colors = {1: "var(--down-color)", 2: "var(--info-color)", 3: "var(--warning-color)", 4: "var(--accent)", 5: "var(--up-color)"}
             urg_color = urg_colors.get(advisor.urgency, "var(--text-muted)")
 
             # 风险条颜色
             if advisor.risk_score >= 50:
-                risk_bar_color = "#ff4b4b"
+                risk_bar_color = "var(--up-color)"
             elif advisor.risk_score >= 30:
-                risk_bar_color = "#ffab40"
+                risk_bar_color = "var(--warning-color)"
             else:
-                risk_bar_color = "#00c853"
+                risk_bar_color = "var(--down-color)"
 
             st.html(f"""
             <div style="background:var(--bg-card); border:1px solid {urg_color}40;
@@ -335,11 +335,11 @@ else:
                     </div>
                 </div>
                 <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:8px; font-size:0.85em;">
-                    <span style="color:var(--text-secondary);">📊 趋势: <b style="color:{'#00c853' if '多头' in advisor.trend else '#ff4b4b' if '空头' in advisor.trend else '#ffab40'};">{advisor.trend}</b></span>
+                    <span style="color:var(--text-secondary);">📊 趋势: <b style="color:{'var(--down-color)' if '多头' in advisor.trend else 'var(--up-color)' if '空头' in advisor.trend else 'var(--warning-color)'};">{advisor.trend}</b></span>
                     <span style="color:var(--text-secondary);">🏆 {advisor.v10_state}</span>
                     {f'<span style="color:var(--text-secondary);">📉 {advisor.swing_state}</span>' if advisor.swing_state else ''}
-                    <span style="color:var(--text-secondary);">🛑 动态止损: <b style="color:#ff4b4b;">¥{advisor.dynamic_stop}</b></span>
-                    <span style="color:var(--text-secondary);">🎯 动态目标: <b style="color:#00c853;">¥{advisor.dynamic_target}</b></span>
+                    <span style="color:var(--text-secondary);">🛑 动态止损: <b style="color:var(--up-color);">¥{advisor.dynamic_stop}</b></span>
+                    <span style="color:var(--text-secondary);">🎯 动态目标: <b style="color:var(--down-color);">¥{advisor.dynamic_target}</b></span>
                 </div>
                 <div style="margin-top:6px; font-size:0.82em; color:var(--text-secondary);">
                     {" · ".join(advisor.details[:5])}
@@ -413,7 +413,7 @@ else:
                 actual_sell_qty = sell_qty_input if sell_qty_input > 0 else max_qty
                 est_pnl = (sell_price_input - p["buy_price"]) * actual_sell_qty
                 est_pnl_pct = (sell_price_input - p["buy_price"]) / p["buy_price"] * 100 if p["buy_price"] > 0 else 0
-                pnl_color = "#ff4b4b" if est_pnl >= 0 else "#00c853"
+                pnl_color = "var(--up-color)" if est_pnl >= 0 else "var(--down-color)"
                 remaining_qty = max_qty - actual_sell_qty
 
                 st.html(f"""

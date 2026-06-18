@@ -21,9 +21,9 @@ st.html('<h2 style="margin-top:0;">📊 监控状态</h2>')
 
 # 状态卡片
 status_items = [
-    ("运行状态", "🟢 运行中" if status["running"] else "🔴 已停止", "#00c853" if status["running"] else "#ff4b4b"),
+    ("运行状态", "🟢 运行中" if status["running"] else "🔴 已停止", "var(--down-color)" if status["running"] else "var(--up-color)"),
     ("监控股票", f"{status['watchlist_count']}", "var(--text-primary)"),
-    ("今日提醒", f"{status['alerts_sent']}", "#ff6b35"),
+    ("今日提醒", f"{status['alerts_sent']}", "var(--accent)"),
     ("最后更新", status["last_update"], "var(--text-muted)"),
 ]
 status_cols = st.columns(4)
@@ -95,9 +95,9 @@ if watchlist:
         def highlight_pct(val):
             if isinstance(val, (int, float)):
                 if val > 0:
-                    return 'color: #ff4b4b'
+                    return 'color: var(--up-color)'
                 elif val < 0:
-                    return 'color: #00c853'
+                    return 'color: var(--down-color)'
             return ''
 
         st.dataframe(
@@ -134,25 +134,25 @@ if watchlist:
 
             # 大涨大跌
             if pct > 5:
-                alerts.append(("📈 大涨", f"+{pct:.2f}%", "#ff4b4b"))
+                alerts.append(("📈 大涨", f"+{pct:.2f}%", "var(--up-color)"))
             elif pct < -5:
-                alerts.append(("📉 大跌", f"{pct:.2f}%", "#00c853"))
+                alerts.append(("📉 大跌", f"{pct:.2f}%", "var(--down-color)"))
 
             # 逼近涨停（距涨停<2%）
             if limit_up > 0 and price > 0:
                 pct_to_limit = (limit_up - price) / price * 100
                 if 0 < pct_to_limit < 2:
-                    alerts.append(("🔴 逼近涨停", f"距涨停¥{limit_up:.2f}仅{pct_to_limit:.1f}%", "#ff4b4b"))
+                    alerts.append(("🔴 逼近涨停", f"距涨停¥{limit_up:.2f}仅{pct_to_limit:.1f}%", "var(--up-color)"))
                 elif price >= limit_up:
-                    alerts.append(("⛔ 涨停", f"已封涨停 ¥{limit_up:.2f}", "#ff4b4b"))
+                    alerts.append(("⛔ 涨停", f"已封涨停 ¥{limit_up:.2f}", "var(--up-color)"))
 
             # 逼近跌停
             if limit_down > 0 and price > 0:
                 pct_to_down = (price - limit_down) / price * 100
                 if 0 < pct_to_down < 2:
-                    alerts.append(("🟢 逼近跌停", f"距跌停¥{limit_down:.2f}仅{pct_to_down:.1f}%", "#00c853"))
+                    alerts.append(("🟢 逼近跌停", f"距跌停¥{limit_down:.2f}仅{pct_to_down:.1f}%", "var(--down-color)"))
                 elif price <= limit_down:
-                    alerts.append(("⛔ 跌停", f"已封跌停 ¥{limit_down:.2f}", "#00c853"))
+                    alerts.append(("⛔ 跌停", f"已封跌停 ¥{limit_down:.2f}", "var(--down-color)"))
 
             for tag, detail, color in alerts:
                 anomalies.append((code, name, price, tag, detail, color))
@@ -193,18 +193,18 @@ if watchlist:
                     ask = ob.get(f"ask{i+1}", (0, 0))
                     with bid_cols[i]:
                         st.html(f"""
-                        <div style="text-align:center; background:#00c85310; border-radius:6px; padding:6px 4px;">
+                        <div style="text-align:center; background:var(--down-color)10; border-radius:6px; padding:6px 4px;">
                             <div style="font-size:0.75em; color:var(--text-muted);">买{i+1}</div>
-                            <div style="color:#ff4b4b; font-weight:600;">¥{bid[0]:.2f}</div>
-                            <div style="color:#00c853; font-size:0.85em;">{bid[1]}手</div>
+                            <div style="color:var(--up-color); font-weight:600;">¥{bid[0]:.2f}</div>
+                            <div style="color:var(--down-color); font-size:0.85em;">{bid[1]}手</div>
                         </div>
                         """)
                     with ask_cols[i]:
                         st.html(f"""
-                        <div style="text-align:center; background:#ff4b4b10; border-radius:6px; padding:6px 4px;">
+                        <div style="text-align:center; background:var(--up-color)10; border-radius:6px; padding:6px 4px;">
                             <div style="font-size:0.75em; color:var(--text-muted);">卖{i+1}</div>
-                            <div style="color:#ff4b4b; font-weight:600;">¥{ask[0]:.2f}</div>
-                            <div style="color:#ff4b4b; font-size:0.85em;">{ask[1]}手</div>
+                            <div style="color:var(--up-color); font-weight:600;">¥{ask[0]:.2f}</div>
+                            <div style="color:var(--up-color); font-size:0.85em;">{ask[1]}手</div>
                         </div>
                         """)
 
@@ -212,7 +212,7 @@ if watchlist:
                 cr = ob.get("commission_ratio", 0)
                 cd = ob.get("commission_diff", 0)
                 if cr != 0:
-                    cr_color = "#ff4b4b" if cr > 0 else "#00c853"
+                    cr_color = "var(--up-color)" if cr > 0 else "var(--down-color)"
                     cr_arrow = "▲" if cr > 0 else "▼"
                     st.html(f"""
                     <div style="display:flex; gap:24px; font-size:0.9em; margin-top:8px; justify-content:center;">
@@ -253,8 +253,8 @@ import os
 webhook_url = os.getenv("FEISHU_WEBHOOK_URL", "")
 if webhook_url:
     st.html(f"""
-    <div style="background:#00c85310; border:1px solid #00c85330; border-radius:10px; padding:14px 18px;">
-        <span style="color:#00c853; font-weight:600;">✅ 飞书 Webhook 已配置</span>
+    <div style="background:var(--down-color)10; border:1px solid var(--down-color)30; border-radius:10px; padding:14px 18px;">
+        <span style="color:var(--down-color); font-weight:600;">✅ 飞书 Webhook 已配置</span>
     </div>
     """)
     if st.button("🧪 测试通知"):

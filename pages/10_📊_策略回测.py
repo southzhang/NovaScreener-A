@@ -136,41 +136,41 @@ if "bt_result" in st.session_state:
     # 顶部概览指标
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     with c1:
-        color = "#ef4444" if result.total_return >= 0 else "#22c55e"
+        color = "var(--up-color)" if result.total_return >= 0 else "var(--down-color)"
         st.html(f"""
-        <div style="text-align:center;padding:12px;background:#1a1a2e;border-radius:10px;">
+        <div style="text-align:center;padding:12px;background:var(--bg-primary);border-radius:10px;">
             <div style="font-size:12px;color:#888;">总收益率</div>
             <div style="font-size:22px;font-weight:700;color:{color};">{result.total_return:+.2f}%</div>
         </div>""")
     with c2:
         st.html(f"""
-        <div style="text-align:center;padding:12px;background:#1a1a2e;border-radius:10px;">
+        <div style="text-align:center;padding:12px;background:var(--bg-primary);border-radius:10px;">
             <div style="font-size:12px;color:#888;">交易次数</div>
             <div style="font-size:22px;font-weight:700;">{len(result.trades)}</div>
         </div>""")
     with c3:
         st.html(f"""
-        <div style="text-align:center;padding:12px;background:#1a1a2e;border-radius:10px;">
+        <div style="text-align:center;padding:12px;background:var(--bg-primary);border-radius:10px;">
             <div style="font-size:12px;color:#888;">胜率</div>
-            <div style="font-size:22px;font-weight:700;color:#00d4aa;">{result.win_rate:.1f}%</div>
+            <div style="font-size:22px;font-weight:700;color:var(--down-color);">{result.win_rate:.1f}%</div>
         </div>""")
     with c4:
         st.html(f"""
-        <div style="text-align:center;padding:12px;background:#1a1a2e;border-radius:10px;">
+        <div style="text-align:center;padding:12px;background:var(--bg-primary);border-radius:10px;">
             <div style="font-size:12px;color:#888;">盈亏比</div>
-            <div style="font-size:22px;font-weight:700;color:#fbbf24;">{result.profit_factor:.2f}</div>
+            <div style="font-size:22px;font-weight:700;color:var(--warning-color);">{result.profit_factor:.2f}</div>
         </div>""")
     with c5:
         st.html(f"""
-        <div style="text-align:center;padding:12px;background:#1a1a2e;border-radius:10px;">
+        <div style="text-align:center;padding:12px;background:var(--bg-primary);border-radius:10px;">
             <div style="font-size:12px;color:#888;">最大回撤</div>
-            <div style="font-size:22px;font-weight:700;color:#ef4444;">-{result.max_drawdown:.2f}%</div>
+            <div style="font-size:22px;font-weight:700;color:var(--up-color);">-{result.max_drawdown:.2f}%</div>
         </div>""")
     with c6:
         st.html(f"""
-        <div style="text-align:center;padding:12px;background:#1a1a2e;border-radius:10px;">
+        <div style="text-align:center;padding:12px;background:var(--bg-primary);border-radius:10px;">
             <div style="font-size:12px;color:#888;">最大连亏</div>
-            <div style="font-size:22px;font-weight:700;color:#ef4444;">{result.max_consecutive_losses}次</div>
+            <div style="font-size:22px;font-weight:700;color:var(--up-color);">{result.max_consecutive_losses}次</div>
         </div>""")
 
     # 详细统计
@@ -217,8 +217,8 @@ if "bt_result" in st.session_state:
     )
 
     # K线
-    colors_up = '#ef4444'
-    colors_down = '#22c55e'
+    colors_up = 'var(--up-color)'
+    colors_down = 'var(--down-color)'
 
     fig.add_trace(go.Candlestick(
         x=dates_arr,
@@ -323,7 +323,7 @@ if "bt_result" in st.session_state:
         def highlight_pnl(row):
             styles = [""] * len(row)
             pnl_val = float(row["盈亏%"].replace("%", "").replace("+", ""))
-            color = "#ef4444" if pnl_val >= 0 else "#22c55e"
+            color = "var(--up-color)" if pnl_val >= 0 else "var(--down-color)"
             idx = list(row.index).index("盈亏%")
             styles[idx] = f"color: {color}; font-weight: bold"
             return styles

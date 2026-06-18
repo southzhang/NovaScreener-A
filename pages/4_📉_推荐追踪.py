@@ -59,9 +59,9 @@ avg_day3 = (sum(day3_pcts) / len(day3_pcts)) if day3_pcts else 0
 stat_cols = st.columns(4)
 stat_items = [
     ("📋 总推荐次数", f"{total_recs}", "var(--text-primary)", ""),
-    ("📈 次日胜率", f"{next_day_win_rate:.1f}%", "#ff4b4b" if next_day_win_rate >= 50 else "#00c853", f"{next_day_wins}胜/{total_recs - next_day_wins}亏" if total_recs > 0 else "—"),
-    ("📈 3日胜率", f"{day3_win_rate:.1f}%", "#ff4b4b" if day3_win_rate >= 50 else "#00c853", f"{day3_wins}胜/{total_recs - day3_wins}亏" if total_recs > 0 else "—"),
-    ("💰 平均次日收益", f"{avg_next_day:+.2f}%", "#ff4b4b" if avg_next_day >= 0 else "#00c853", f"3日平均 {avg_day3:+.2f}%" if day3_pcts else "—"),
+    ("📈 次日胜率", f"{next_day_win_rate:.1f}%", "var(--up-color)" if next_day_win_rate >= 50 else "var(--down-color)", f"{next_day_wins}胜/{total_recs - next_day_wins}亏" if total_recs > 0 else "—"),
+    ("📈 3日胜率", f"{day3_win_rate:.1f}%", "var(--up-color)" if day3_win_rate >= 50 else "var(--down-color)", f"{day3_wins}胜/{total_recs - day3_wins}亏" if total_recs > 0 else "—"),
+    ("💰 平均次日收益", f"{avg_next_day:+.2f}%", "var(--up-color)" if avg_next_day >= 0 else "var(--down-color)", f"3日平均 {avg_day3:+.2f}%" if day3_pcts else "—"),
 ]
 for col, (label, value, color, sub) in zip(stat_cols, stat_items):
     with col:
@@ -75,7 +75,7 @@ for col, (label, value, color, sub) in zip(stat_cols, stat_items):
         """)
 
 # 数据时效性
-badge, badge_color = ("✅ 新鲜", "#00c853") if fresh.get("fresh") else ("⚠️ 过期", "#ffab40") if fresh.get("exists") else ("❌ 无数据", "var(--text-primary)")
+badge, badge_color = ("✅ 新鲜", "var(--down-color)") if fresh.get("fresh") else ("⚠️ 过期", "var(--warning-color)") if fresh.get("exists") else ("❌ 无数据", "var(--text-primary)")
 mtime = fresh.get("mtime", "—")
 age = fresh.get("age_minutes")
 age_str = f"{age:.0f}分钟前" if age is not None else "—"
@@ -115,12 +115,12 @@ if tracker:
 
 if is_cooldown:
     st.html(f"""
-    <div style="background:#ff4b4b10; border:1px solid #ff4b4b30; border-left:4px solid #ff4b4b;
+    <div style="background:var(--up-color)10; border:1px solid var(--up-color)30; border-left:4px solid var(--up-color);
                 border-radius:10px; padding:16px 20px; margin-bottom:16px;">
         <div style="display:flex; align-items:center; gap:10px;">
             <span style="font-size:1.3em;">🔴</span>
             <div>
-                <div style="font-weight:700; color:#ff4b4b; font-size:1.1em;">冷静中</div>
+                <div style="font-weight:700; color:var(--up-color); font-size:1.1em;">冷静中</div>
                 <div style="color:var(--text-secondary); font-size:0.88em;">
                     连续 {consecutive_all_loss} 次全部亏损，建议暂停推荐，等待行情好转
                 </div>
@@ -130,12 +130,12 @@ if is_cooldown:
     """)
 else:
     st.html(f"""
-    <div style="background:#00c85310; border:1px solid #00c85330; border-left:4px solid #00c853;
+    <div style="background:var(--down-color)10; border:1px solid var(--down-color)30; border-left:4px solid var(--down-color);
                 border-radius:10px; padding:16px 20px; margin-bottom:16px;">
         <div style="display:flex; align-items:center; gap:10px;">
             <span style="font-size:1.3em;">🟢</span>
             <div>
-                <div style="font-weight:700; color:#00c853; font-size:1.1em;">可推荐</div>
+                <div style="font-weight:700; color:var(--down-color); font-size:1.1em;">可推荐</div>
                 <div style="color:var(--text-secondary); font-size:0.88em;">
                     近期无连续全亏记录，推荐状态正常
                 </div>
@@ -164,7 +164,7 @@ else:
         validated = [r for r in recs if r.get("status") == "validated" and r.get("next_day_pct") is not None]
         day_wins = sum(1 for r in validated if r.get("next_day_pct", 0) > 0)
         day_rate = (day_wins / len(validated) * 100) if validated else 0
-        rate_color = "#ff4b4b" if day_rate >= 50 else "#00c853"
+        rate_color = "var(--up-color)" if day_rate >= 50 else "var(--down-color)"
 
         st.html(f"""
         <div style="background:var(--bg-card); border:1px solid var(--border-color);
@@ -198,13 +198,13 @@ else:
 
             # 信号等级边框色
             if signal == "全买入":
-                border_c = "#ff4b4b"
+                border_c = "var(--up-color)"
                 tag_class = "tag-up"
             elif signal == "强庄买":
-                border_c = "#ffab40"
+                border_c = "var(--warning-color)"
                 tag_class = "tag-accent"
             elif signal == "基础买":
-                border_c = "#ffeb3b"
+                border_c = "var(--warning-color)"
                 tag_class = "tag-info"
             else:
                 border_c = "var(--border-color)"
@@ -212,7 +212,7 @@ else:
 
             # 次日收益色
             if nd_pct is not None:
-                nd_color = "#ff4b4b" if nd_pct >= 0 else "#00c853"
+                nd_color = "var(--up-color)" if nd_pct >= 0 else "var(--down-color)"
                 nd_arrow = "▲" if nd_pct >= 0 else "▼"
                 nd_str = f"{nd_arrow} {nd_pct:+.2f}%"
             else:
@@ -221,7 +221,7 @@ else:
 
             # 3日收益色
             if d3_pct is not None:
-                d3_color = "#ff4b4b" if d3_pct >= 0 else "#00c853"
+                d3_color = "var(--up-color)" if d3_pct >= 0 else "var(--down-color)"
                 d3_arrow = "▲" if d3_pct >= 0 else "▼"
                 d3_str = f"{d3_arrow} {d3_pct:+.2f}%"
             else:
@@ -230,9 +230,9 @@ else:
 
             # 验证状态
             if status == "validated":
-                status_badge = '<span style="color:#00c853; font-size:0.82em;">✅ 已验证</span>'
+                status_badge = '<span style="color:var(--down-color); font-size:0.82em;">✅ 已验证</span>'
             else:
-                status_badge = '<span style="color:#ffab40; font-size:0.82em;">⏳ 待验证</span>'
+                status_badge = '<span style="color:var(--warning-color); font-size:0.82em;">⏳ 待验证</span>'
 
             # 止损价
             sl_str = f"¥{stop_loss:.2f}" if isinstance(stop_loss, (int, float)) and stop_loss else "—"
@@ -248,7 +248,7 @@ else:
                     </div>
                     <div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap; font-size:0.88em;">
                         <span style="color:var(--text-secondary);">推荐价 <b style="color:var(--text-primary);">¥{price:.2f}</b></span>
-                        <span style="color:var(--text-secondary);">止损 <b style="color:#ff4b4b;">{sl_str}</b></span>
+                        <span style="color:var(--text-secondary);">止损 <b style="color:var(--up-color);">{sl_str}</b></span>
                         <span style="color:var(--text-secondary);">次日 <b style="color:{nd_color};">{nd_str}</b></span>
                         <span style="color:var(--text-secondary);">3日 <b style="color:{d3_color};">{d3_str}</b></span>
                         {status_badge}
@@ -310,11 +310,11 @@ with col2:
     <div class="dash-card" style="display:flex; gap:24px; align-items:center;">
         <div style="text-align:center;">
             <div class="dash-card-header">已验证</div>
-            <div class="dash-card-value" style="color:#00c853;">{validated_count}</div>
+            <div class="dash-card-value" style="color:var(--down-color);">{validated_count}</div>
         </div>
         <div style="text-align:center;">
             <div class="dash-card-header">待验证</div>
-            <div class="dash-card-value" style="color:#ffab40;">{pending_count}</div>
+            <div class="dash-card-value" style="color:var(--warning-color);">{pending_count}</div>
         </div>
         <div style="text-align:center;">
             <div class="dash-card-header">总记录</div>
@@ -350,9 +350,9 @@ if tracker:
         def _highlight_pct(val):
             if isinstance(val, (int, float)) and not pd.isna(val):
                 if val > 0:
-                    return "color: #ff4b4b"
+                    return "color: var(--up-color)"
                 elif val < 0:
-                    return "color: #00c853"
+                    return "color: var(--down-color)"
             return ""
 
         styled = df.style.map(_highlight_pct, subset=["次日收益%", "3日收益%"])
