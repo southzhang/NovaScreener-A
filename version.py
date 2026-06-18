@@ -1,5 +1,5 @@
 """V10 量化盯盘选股 — 版本管理"""
-VERSION = "v1.13.1"
+VERSION = "v1.14.0"
 REPO_OWNER = "southzhang"
 REPO_NAME = "NovaScreener-A"
 
