@@ -705,8 +705,8 @@ def inject_global_css():
     ::-webkit-scrollbar-thumb {{ background: var(--border-color); border-radius: 3px; }}
     ::-webkit-scrollbar-thumb:hover {{ background: var(--text-muted); }}
     /* ========== 背景渐变 ========== */
-    .stApp { background: {bg_gradient}; }
-    [data-testid="stSidebar"] { background: {sidebar_gradient}; }
+    .stApp {{ background: {bg_gradient}; }}
+    [data-testid="stSidebar"] {{ background: {sidebar_gradient}; }}
 
     /* ========== 统一组件类（页面间共享） ========== */
     /* 章节标题统一间距 */
