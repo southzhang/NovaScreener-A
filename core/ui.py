@@ -710,7 +710,7 @@ def inject_global_css():
 
     /* ========== 统一组件类（页面间共享） ========== */
     /* 章节标题统一间距 */
-    .section-title { margin-top: 1.5rem; margin-bottom: 0.8rem; font-size: 1.15em; font-weight: 700; color: var(--text-primary); }
+    .section-title {{ margin-top: 1.5rem; margin-bottom: 0.8rem; font-size: 1.15em; font-weight: 700; color: var(--text-primary); }}
     /* 信息卡片网格 */
     .info-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 10px 0; }}
     /* 统一表格表头 */
