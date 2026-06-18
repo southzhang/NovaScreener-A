@@ -27,6 +27,9 @@ from datetime import datetime
 
 # 集合竞价时段(9:00-9:25)跳过，等9:30开盘有真实数据再跑
 now = datetime.now()
+if now.weekday() >= 5:
+    print(f"⏳ 周末({now.strftime('%A')})，跳过扫描")
+    sys.exit(0)
 if now.hour == 9 and now.minute < 30:
     print(f"⏳ 集合竞价中({now.strftime('%H:%M')})，跳过扫描，等9:30开盘")
     sys.exit(0)
@@ -36,7 +39,7 @@ if now.hour > 14 or (now.hour == 14 and now.minute >= 55):
     print(f"⏳ 14:55后跳过扫描，保留尾盘时段数据")
     sys.exit(0)
 
-sys.path.insert(0, '/Users/southzhang/.hermes/workspace')
+sys.path.insert(0, os.path.expanduser('~/.hermes/workspace'))
 sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
 from v10_core import ema_fast, hhv_fast, llv_fast, barslast_fast
 from tech_analysis import vibe_score as _vibe_score_fn
@@ -53,6 +56,7 @@ except ImportError:
     _HAS_QUOTE_ADAPTER = False
 
 # iFinD HTTP API (分钟K线 + 基本面)
+# 统一使用 ifind_http_api.iFinDAPI 管理 token，避免双份token不一致
 IFIND_BASE_URL = "https://quantapi.51ifind.com/api/v1"
 IFIND_REFRESH_TOKEN = os.environ.get("IFIND_REFRESH_TOKEN", "")
 # 备用：从.env文件读取
@@ -68,65 +72,61 @@ if not IFIND_REFRESH_TOKEN:
                         break
     except Exception:
         pass
-IFIND_ACCESS_TOKEN = None
-IFIND_TOKEN_EXPIRY = 0
-_token_lock = threading.Lock()
+
+# 统一使用 ifind_http_api.iFinDAPI 实例（自带token缓存+自动刷新+线程安全）
+try:
+    from ifind_http_api import iFinDAPI
+    _ifind_api = iFinDAPI(refresh_token=IFIND_REFRESH_TOKEN)
+    _HAS_IFIND = True
+except ImportError:
+    _ifind_api = None
+    _HAS_IFIND = False
 
 # iFinD API 需要自定义 SSL context（证书问题）
 _ifind_ctx = ssl.create_default_context()
 _ifind_ctx.check_hostname = False
 _ifind_ctx.verify_mode = ssl.CERT_NONE
 
-# ====== V10 参数（与v10_scan_strict.py一致）======
+# ====== HTTP连接池（复用TCP连接，减少握手开销）======
+# 用于腾讯K线批量获取等高频请求，30线程×200只股票可省5-15秒
+import requests as _requests
+from requests.adapters import HTTPAdapter
+_http_session = _requests.Session()
+_http_session.mount('https://', HTTPAdapter(pool_connections=10, pool_maxsize=30))
+_http_session.headers.update({'User-Agent': 'Mozilla/5.0'})
+
+# ====== V10 参数（与strategies.py scan_v10_full 对齐）======
 参数_放量 = 1.5
 参数_强庄 = 3
-参数_通道宽度 = 0.015
+参数_通道宽度 = 0.008  # 0.8%，与strategies.py一致（旧值0.015过严，漏掉0.8%-1.5%的信号）
 
 
 def log(msg):
     print(msg, flush=True)
 
 
-# ====== iFinD Token管理 ======
+# ====== iFinD Token管理（委托给 ifind_http_api.iFinDAPI）======
 def _get_ifind_token():
-    """获取iFinD access_token（自动刷新）"""
-    global IFIND_ACCESS_TOKEN, IFIND_TOKEN_EXPIRY
-    with _token_lock:
-        if IFIND_ACCESS_TOKEN and time.time() < IFIND_TOKEN_EXPIRY - 300:
-            return IFIND_ACCESS_TOKEN
-        if not IFIND_REFRESH_TOKEN:
-            return None
-        try:
-            resp = requests.post(
-                url=f"{IFIND_BASE_URL}/get_access_token",
-                headers={"Content-Type": "application/json", "refresh_token": IFIND_REFRESH_TOKEN},
-                timeout=10
-            )
-            data = json.loads(resp.content)
-            if data.get('data', {}).get('access_token'):
-                IFIND_ACCESS_TOKEN = data['data']['access_token']
-                IFIND_TOKEN_EXPIRY = time.time() + 72000  # 20小时
-                return IFIND_ACCESS_TOKEN
-        except Exception as e:
-            log(f"  ⚠️ iFinD token刷新失败: {e}")
+    """获取iFinD access_token（通过iFinDAPI实例自动管理缓存+刷新）"""
+    if not _ifind_api or not IFIND_REFRESH_TOKEN:
         return None
+    try:
+        if _ifind_api._refresh_access_token():
+            return _ifind_api.access_token
+    except Exception as e:
+        log(f"  ⚠️ iFinD token刷新失败: {e}")
+    return None
 
 
 def _ifind_post(endpoint, params, timeout=30):
-    """iFinD API通用POST"""
-    token = _get_ifind_token()
-    if not token:
-        log(f"  ⚠️ iFinD token不可用，跳过{endpoint}")
+    """iFinD API通用POST（委托给iFinDAPI实例，统一token管理）"""
+    if not _ifind_api:
+        log(f"  ⚠️ iFinD不可用，跳过{endpoint}")
         return None
     try:
-        resp = requests.post(
-            url=f"{IFIND_BASE_URL}/{endpoint}",
-            json=params,
-            headers={"Content-Type": "application/json", "access_token": token},
-            timeout=timeout
-        )
-        return json.loads(resp.content)
-    except Exception:
+        return _ifind_api._post(endpoint, params, timeout=timeout)
+    except Exception as e:
+        log(f"  ⚠️ iFinD请求失败 {endpoint}: {e}")
         return None
 
 
@@ -574,9 +574,8 @@ def fetch_klines(code, count=250):
     secid = f"sh{code}" if code.startswith('6') else f"sz{code}"
     url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={secid},day,,,{count},qfq"
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        resp = urllib.request.urlopen(req, timeout=8, context=_ifind_ctx)
-        raw = resp.read().decode('utf-8')
+        resp = _http_session.get(url, timeout=8, verify=False)
+        raw = resp.text
         # _var格式: kline_dayqfq={...json...}
         json_str = raw.split('=', 1)[1] if '=' in raw else raw
         data = json.loads(json_str)
@@ -589,6 +588,7 @@ def fetch_klines(code, count=250):
                 'high': np.array([float(b[3]) for b in bars]),
                 'low': np.array([float(b[4]) for b in bars]),
                 'volume': np.array([float(b[5]) for b in bars]),
+                'last_date': bars[-1][0] if bars[-1] else '',
             }
     except Exception:
         pass
@@ -630,7 +630,7 @@ def batch_prefetch_klines(codes):
     t0 = time.time()
 
     # ====== 腾讯30线程并发（最快）======
-    log(f"  📡 腾讯K线批量获取({len(codes)}只, 30线程)...")
+    log(f"  📡 腾讯K线批量获取({len(codes)}只, 20线程)...")
     _tencent_fill_klines(codes)
     t1 = time.time()
     tc_count = len(_kline_cache)
@@ -696,7 +696,7 @@ def batch_prefetch_klines(codes):
 
 
 def _tencent_fill_klines(codes):
-    """腾讯逐只获取K线，填入缓存（30线程并发）"""
+    """腾讯逐只获取K线，填入缓存（20线程并发，降低WAF风险）"""
     _lock = threading.Lock()
 
     def _fetch_one(code):
@@ -705,7 +705,7 @@ def _tencent_fill_klines(codes):
             with _lock:
                 _kline_cache[code] = data
 
-    with ThreadPoolExecutor(max_workers=30) as executor:
+    with ThreadPoolExecutor(max_workers=20) as executor:
         futures = {executor.submit(_fetch_one, c): c for c in codes}
         done = 0
         for f in as_completed(futures):
@@ -715,14 +715,15 @@ def _tencent_fill_klines(codes):
 
 
 def _fetch_klines_tencent(code, count=250):
-    """纯腾讯K线获取（不尝试QMT，用于批量预取的腾讯降级路径）"""
+    """纯腾讯K线获取（不尝试QMT，用于批量预取的腾讯降级路径）
+    使用模块级requests.Session连接池复用TCP连接。
+    """
     # 腾讯K线：ifzq.gtimg.cn（web.ifzq已501被WAF封，2026-06起改用裸域名+_var参数）
     secid = f"sh{code}" if code.startswith('6') else f"sz{code}"
     url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={secid},day,,,{count},qfq"
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        resp = urllib.request.urlopen(req, timeout=8, context=_ifind_ctx)
-        raw = resp.read().decode('utf-8')
+        resp = _http_session.get(url, timeout=8, verify=False)
+        raw = resp.text
         # _var格式: kline_dayqfq={...json...}
         json_str = raw.split('=', 1)[1] if '=' in raw else raw
         data = json.loads(json_str)
@@ -736,6 +737,7 @@ def _fetch_klines_tencent(code, count=250):
             'high': np.array([float(b[3]) for b in bars]),
             'low': np.array([float(b[4]) for b in bars]),
             'volume': np.array([float(b[5]) for b in bars]),
+            'last_date': bars[-1][0] if bars[-1] else '',
         }
     except Exception:
         return None
@@ -858,6 +860,9 @@ def _scan_one_rt(stock):
     # 06-12: 腾讯K线WAF封禁时走QMT补缺，QMT K线可能缺今日数据
     # 检测方法：如果最后一根K线的收盘价==最高价==最低价（盘中虚拟K线特征不明显）
     # 更可靠：用stock的实时行情数据追加今日虚拟K线
+    # 检查K线最后一天是否为今天，如果不是则追加今日虚拟K线
+    # 旧版用2%涨跌阈值判断，涨跌<2%时漏拼今日数据导致信号滞后
+    # 新版用K线日期精确判断，无日期时回退到2%阈值
     if stock and len(close_ext) > 0:
         rt_price = stock.get('price', 0)
         rt_open = stock.get('open', 0)
@@ -865,8 +870,17 @@ def _scan_one_rt(stock):
         rt_low = stock.get('low', 0)
         rt_vol = stock.get('volume', 0)
         last_close = float(close_ext[-1])
-        # 如果实时价格与最后一根K线收盘价差距>2%，说明K线不是今天的
-        if rt_price > 0 and abs(rt_price - last_close) / last_close > 0.02:
+        last_date = kdata.get('last_date', '')
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        # 优先用日期判断：K线最后一天不是今天 → 追加虚拟K线
+        need_append = False
+        if last_date and not last_date.startswith(today_str):
+            need_append = True
+        elif not last_date:
+            # 无日期信息时回退到2%阈值（QMT补缺的K线无日期）
+            if rt_price > 0 and abs(rt_price - last_close) / last_close > 0.02:
+                need_append = True
+        if need_append and rt_price > 0:
             # 追加今日虚拟K线
             close_ext = np.append(close_ext, rt_price)
             high_ext = np.append(high_ext, rt_high if rt_high > 0 else rt_price)

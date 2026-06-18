@@ -57,7 +57,11 @@ def get_realtime(code):
             "price": price_val,
             "change_pct": chg,
             "amount_wan": float(parts[37]) if parts[37] else 0,
-            "circ_yi": float(parts[44]) if parts[44] else 0,
+            "circ_yi": float(parts[44]) if len(parts) > 44 and parts[44] else 0,
+            "high": float(parts[33]) if len(parts) > 33 and parts[33] else 0,
+            "low": float(parts[34]) if len(parts) > 34 and parts[34] else 0,
+            "open": float(parts[5]) if parts[5] else 0,
+            "volume": float(parts[36]) if len(parts) > 36 and parts[36] else 0,
         }
     except (ValueError, IndexError):
         return None
