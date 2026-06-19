@@ -32,8 +32,8 @@ SIGNAL_RANK = {"全买入": 3, "强庄买": 2, "基础买": 1}
 SIGNAL_EMOJI = {"全买入": "🔴", "强庄买": "🟠", "基础买": "🟡"}
 
 # ===== 把关阈值 =====
-SCORE_RECOMMEND_MIN = 55   # 推荐最低评分（旧值60→50→45→55，与扫描选股60分门槛对齐，强庄买+10后55≈原始45）
-SCORE_OBSERVE_MIN = 30     # 观察池最低评分（旧值40→35→30，基础买数据不全时容易不够）
+SCORE_RECOMMEND_MIN = 60   # 推荐最低评分（强信号才进推荐池）
+SCORE_OBSERVE_MIN = 40     # 观察池最低评分（基础买≥40进观察池，<40排除）
 COOLDOWN_LOSS_STREAK = 3   # 连续全亏次数触发冷静期
 LIMIT_UP_PCT = 9.5         # 涨停阈值（%），接近此值排除
 NEAR_LIMIT_UP_PCT = 9.0    # 接近涨停阈值
@@ -369,10 +369,10 @@ def main():
 
     # ===== 把关2: 信号等级分流 =====
     # 全买入 + 强庄买 → 候选推荐池
-    # 基础买评分≥60的也进入推荐池（旧逻辑直接排除，导致优质基础买永远无法推荐）
+    # 基础买 → 直接进观察池（弱信号，不推荐）
     recommend_pool = [s for s in stocks if s.get("signal") in ("全买入", "强庄买")]
     base_buy_pool = [s for s in stocks if s.get("signal") == "基础买"]
-    observe_pool = []  # 基础买先不进观察池，评分后再分流
+    observe_pool = []  # 基础买先收集，评分后决定去留
     log(f"📋 信号分流: 推荐{(len(recommend_pool))}只(全买入+强庄买) + 基础买{len(base_buy_pool)}只(待评分分流)")
 
     # ===== 把关3: 基本面排雷 =====
@@ -449,12 +449,9 @@ def main():
     scored_base = score_all_candidates(base_buy_pool) if base_buy_pool else []
     log(f"✅ 评分完成: 推荐池{len(scored_recommend)}只 + 基础买{len(scored_base)}只")
 
-    # 基础买评分分流：≥60进推荐池，40-59进观察池，<40排除
+    # 基础买评分分流：只进观察池，不进推荐池（弱信号不具备推荐价值）
     for s in scored_base:
-        if s["score"] >= SCORE_RECOMMEND_MIN:
-            scored_recommend.append(s)
-            log(f"  ⬆️ {s['name']}({s['code']}) 基础买评分{s['score']}≥{SCORE_RECOMMEND_MIN}，升级到推荐池")
-        elif s["score"] >= SCORE_OBSERVE_MIN:
+        if s["score"] >= SCORE_OBSERVE_MIN:
             observe_pool.append(s)
         # <40的直接排除（不进任何池）
     

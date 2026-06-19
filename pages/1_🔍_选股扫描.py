@@ -269,16 +269,28 @@ def _render_results(results):
         return f"{base}{cnt}_" if cnt > 0 else f"{base}_"
 
     if v10_results:
-        st.html('<h2>🏆 V10 信号 · 6维评分 · 买入推荐</h2>')
+        # 信号分级：强信号(全买入+强庄买)默认显示，基础买默认折叠
+        strong_signals = [r for r in v10_results if r.get("signal_type") in ("全买入", "强庄买")]
+        base_signals = [r for r in v10_results if r.get("signal_type") == "基础买"]
+        
+        if strong_signals:
+            st.html(f'<h2>🏆 V10 信号 · 6维评分 · 买入推荐（{len(strong_signals)}只强信号）</h2>')
+        elif base_signals:
+            st.html(f'<h2>🏆 V10 信号 · 6维评分（{len(base_signals)}只基础买，无强信号）</h2>')
+        else:
+            st.html('<h2>🏆 V10 信号</h2>')
+        
+        # 渲染强信号
+        _v10_render_list = strong_signals
         # 批量获取实时行情
-        _codes = [r['code'] for r in v10_results]
+        _codes = [r['code'] for r in _v10_render_list]
         _quotes = {}
         for _c in _codes:
             _q = get_realtime_quote(_c)
             if _q:
                 _quotes[_c] = _q
         
-        for r in v10_results:
+        for r in _v10_render_list:
             signal_type = r.get("signal_type", "基础买")
             if signal_type == "全买入":
                 emoji = "🔴"
@@ -383,6 +395,25 @@ def _render_results(results):
                 code=r["code"], name=r["name"], price=r["price"],
                 key_prefix=_unique_prefix("v10", r["code"]),
             )
+
+        # 基础买折叠显示（弱信号，默认折叠）
+        if base_signals:
+            with st.expander(f"🟡 基础买信号（{len(base_signals)}只，弱信号，点击展开）", expanded=False):
+                st.caption("基础买仅满足6个条件（隧道多头+双线定式+QW上升+通道间距+阳线+放量），不含强庄和MACD金叉，信号较弱，仅供参考。")
+                for r in base_signals:
+                    _q = _quotes.get(r['code'], {})
+                    _cur = _q.get('price', 0)
+                    _pct = _q.get('pct_change', 0)
+                    _pct_color = "var(--up-color)" if _pct > 0 else "var(--down-color)" if _pct < 0 else "var(--text-secondary)"
+                    _pct_str = f"{_pct:+.2f}%" if _pct else "-"
+                    st.html(f"""
+                    <div class="scan-result-card" style="border-left:4px solid var(--info-color);">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span><b>🟡 {r['name']}</b> <span style="color:var(--text-muted);">{r['code']}</span></span>
+                            <span>¥{_cur:.2f} <span style="color:{_pct_color};">{_pct_str}</span> · {r.get('score',0)}分</span>
+                        </div>
+                    </div>
+                    """)
 
     if pullback_results:
         st.html('<h2>🔄 波段回调机会 · 买入推荐</h2>')
