@@ -230,6 +230,16 @@ def _append_today_bar_to_sina(data: list, code: str) -> list:
         vol = float(parts[36]) if parts[36] else 0  # 成交量(手)
         if vol <= 0:
             return data  # 还没成交
+        # 休市日防护：OHLC与最后一条K线一致→不拼
+        last_bar = data[-1]
+        _last_open = float(last_bar.get("open", 0))
+        _last_high = float(last_bar.get("high", 0))
+        _last_close = float(last_bar.get("close", 0))
+        _rt_open = float(parts[5]) if parts[5] else price
+        _rt_high = float(parts[33]) if parts[33] else price
+        if (_last_open == _rt_open and _last_high == _rt_high and
+            abs(_last_close - price) < 0.001):
+            return data  # 休市日缓存数据，不拼
         today_bar = {
             "day": today_str,
             "open": parts[5] if parts[5] else str(price),

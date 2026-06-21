@@ -247,14 +247,11 @@ def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
     导致均线/趋势/信号全部滞后。用腾讯实时行情的
     开高低收+成交量拼一条当日K线，让V10信号反映今天。
     
-    拼接条件（宽松策略，宁可多拼不可漏拼）：
+    拼接条件：
     1. 今天是工作日（周末不需要拼）
     2. 新浪K线最后一条不是今天（避免重复）
     3. 腾讯实时行情有成交量>0（确认今天确实有交易）
-    
-    旧版只在9:15-16:30拼接，午休11:30-13:00和盘后都不拼，
-    导致午休/盘后扫描的信号全是昨天的。新版只要当天有成交
-    就拼，无论什么时间段。
+    4. 实时行情OHLC与最后一条K线不完全一致（防止休市日缓存数据误拼）
     """
     if df.empty:
         return df
@@ -276,6 +273,14 @@ def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
     vol = quote.get("volume", 0)
     if vol <= 0:
         return df  # 没有成交量说明还没成交（节假日/非交易日）
+    
+    # 休市日防护：腾讯返回缓存数据OHLC与昨天K线完全一致→不拼
+    last_bar = df.iloc[-1]
+    if (last_bar["open"] == quote["open"] and
+        last_bar["high"] == quote["high"] and
+        last_bar["low"] == quote["low"] and
+        abs(last_bar["close"] - quote["price"]) < 0.001):
+        return df  # OHLC与昨天完全一致，今天是休市日，腾讯返回缓存
     
     today_bar = pd.DataFrame([{
         "date": pd.Timestamp(today_str),

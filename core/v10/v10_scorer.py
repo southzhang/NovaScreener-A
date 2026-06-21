@@ -98,9 +98,15 @@ def get_amplitude_percentile(code):
         if not klines[-1][0].startswith(today_str):
             rt = get_realtime(code)
             if rt and rt.get("high", 0) > 0 and rt.get("low", 0) > 0 and rt.get("volume", 0) > 0:
-                today_bar = [today_str, str(rt["open"]), str(rt["high"]),
-                             str(rt["low"]), str(rt["price"]), str(rt.get("volume", 0))]
-                klines.append(today_bar)
+                # 休市日防护：OHLC与最后一条K线一致→不拼
+                last_k = klines[-1]
+                if (float(last_k[1]) == rt["open"] and float(last_k[2]) == rt["high"] and
+                    float(last_k[3]) == rt["low"] and abs(float(last_k[4]) - rt["price"]) < 0.001):
+                    pass  # 休市日缓存数据，不拼
+                else:
+                    today_bar = [today_str, str(rt["open"]), str(rt["high"]),
+                                 str(rt["low"]), str(rt["price"]), str(rt.get("volume", 0))]
+                    klines.append(today_bar)
     amps = []
     for k in klines:
         hi, lo = float(k[2]), float(k[3])

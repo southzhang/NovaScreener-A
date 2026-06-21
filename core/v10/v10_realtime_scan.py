@@ -881,12 +881,17 @@ def _scan_one_rt(stock):
             if rt_price > 0 and abs(rt_price - last_close) / last_close > 0.02:
                 need_append = True
         if need_append and rt_price > 0:
-            # 追加今日虚拟K线
-            close_ext = np.append(close_ext, rt_price)
-            high_ext = np.append(high_ext, rt_high if rt_high > 0 else rt_price)
-            low_ext = np.append(low_ext, rt_low if rt_low > 0 else rt_price)
-            vol_ext = np.append(vol_ext, rt_vol if rt_vol > 0 else 0)
-            open_ext = np.append(open_ext, rt_open if rt_open > 0 else rt_price)
+            # 休市日防护：实时行情OHLC与最后一条K线一致→不拼
+            if (abs(last_close - rt_price) < 0.001 and
+                rt_high > 0 and abs(float(close_ext[-1]) - rt_price) < 0.001):
+                pass  # 休市日缓存数据，不追加
+            else:
+                # 追加今日虚拟K线
+                close_ext = np.append(close_ext, rt_price)
+                high_ext = np.append(high_ext, rt_high if rt_high > 0 else rt_price)
+                low_ext = np.append(low_ext, rt_low if rt_low > 0 else rt_price)
+                vol_ext = np.append(vol_ext, rt_vol if rt_vol > 0 else 0)
+                open_ext = np.append(open_ext, rt_open if rt_open > 0 else rt_price)
 
     result = scan_stock_rt(close_ext, high_ext, low_ext, vol_ext, open_ext)
     if result is None or not result['signals']:
