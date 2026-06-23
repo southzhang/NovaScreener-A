@@ -303,35 +303,53 @@ def score_and_recommend(
     sig_score = sig_map.get(signal_type, 0)
     dimensions.append(DimensionScore("V10信号", sig_score, 30, signal_type or "无信号"))
 
-    # ===== 2. 基本面 (15分) - ROE =====
-    roe = fundamental.get("roe")
-    if roe is not None:
-        if roe > 10:
-            f_score = 15
-        elif roe >= 5:
-            f_score = 7.5
-        else:
-            f_score = 0
-        f_desc = f"ROE {roe:.1f}%"
+    # ===== 2. 量价关系 (15分) - 成交活跃度 =====
+    # 使用已有数据：成交量vs均量 + 量价配合
+    vol_ma5 = calc_ma(volume, 5) if n >= 5 else np.array([np.mean(volume)])
+    vol_ratio = volume[-1] / vol_ma5[-1] if vol_ma5[-1] > 0 else 1.0
+    vol_trend = volume[-1] > volume[-3] if n >= 4 else True
+    if vol_ratio > 2.0 and vol_trend:
+        v_score = 15
+        v_desc = f"放量{vol_ratio:.1f}x均量+递增✅"
+    elif vol_ratio > 1.5:
+        v_score = 12
+        v_desc = f"放量{vol_ratio:.1f}x均量"
+    elif vol_ratio > 1.0:
+        v_score = 8
+        v_desc = f"量能正常{vol_ratio:.1f}x"
+    elif vol_ratio > 0.5:
+        v_score = 4
+        v_desc = f"缩量{vol_ratio:.1f}x均量"
     else:
-        f_score = 7.5
-        f_desc = "ROE未知(给半分)"
-    dimensions.append(DimensionScore("基本面", f_score, 15, f_desc))
+        v_score = 0
+        v_desc = f"严重缩量{vol_ratio:.1f}x"
+    dimensions.append(DimensionScore("量价关系", v_score, 15, v_desc))
 
-    # ===== 3. 资金面 (20分) - 主力净流入 =====
-    if capital_flow > 5000:
-        c_score = 20
-        c_desc = f"主力净流入+{capital_flow/10000:.1f}亿"
-    elif capital_flow > 0:
-        c_score = 10
-        c_desc = f"主力净流入+{capital_flow:.0f}万"
-    elif capital_flow < -5000:
-        c_score = 0
-        c_desc = f"主力净流出{capital_flow/10000:.1f}亿"
-    else:
-        c_score = 0
-        c_desc = f"主力净流出{capital_flow:.0f}万"
-    dimensions.append(DimensionScore("资金面", c_score, 20, c_desc))
+    # ===== 3. 均线结构 (20分) - EMA排列 + 通道健康度 =====
+    # 使用已有K线数据计算均线状态，不用外部API
+    ema20_local = ema_fast(close, 20) if n >= 20 else np.array([price])
+    ema50_local = ema_fast(close, 50) if n >= 50 else ema20_local
+    ema120_local = ema_fast(close, 120) if n >= 120 else ema50_local
+    ma5_local = calc_ma(close, 5) if n >= 5 else np.array([price])
+    
+    _struct_score = 0
+    _struct_parts = []
+    if n >= 50 and ema20_local[-1] > ema50_local[-1]:
+        _struct_score += 8
+        _struct_parts.append("短多✅")
+    if n >= 120 and close[-1] > ema120_local[-1]:
+        _struct_score += 6
+        _struct_parts.append("长多✅")
+    if n >= 20:
+        _channel = (ma5_local[-1] - ema20_local[-1]) / ema20_local[-1]
+        if _channel > 0.015:
+            _struct_score += 6
+            _struct_parts.append(f"通道{_channel:.1%}✅")
+        elif _channel > 0:
+            _struct_score += 3
+            _struct_parts.append(f"通道{_channel:.1%}")
+    _struct_str = " ".join(_struct_parts) if _struct_parts else "均线空头"
+    dimensions.append(DimensionScore("均线结构", _struct_score, 20, _struct_str))
 
     # ===== 4. 振幅分位 (15分) =====
     amp_pct = _calc_amplitude_percentile(high, low, close)
@@ -350,14 +368,39 @@ def score_and_recommend(
         a_desc = "数据缺失(给半分)"
     dimensions.append(DimensionScore("振幅分位", a_score, 15, a_desc))
 
-    # ===== 5. 板块风口 (10分) =====
-    if sector_score > 0:
-        w_score = min(sector_score, 10)
-        w_desc = f"板块加分+{w_score}"
+    # ===== 5. 估值位置 (10分) - PE分位 + 价格位置 =====
+    # 用已有quote数据：PE + 价格与EMA20距离
+    _pe_val = fundamental.get("pe", 0) if fundamental else 0
+    _pe_score = 0
+    if _pe_val and _pe_val > 0:
+        if _pe_val > 5 and _pe_val < 30:
+            _pe_score = 5
+            _pe_desc = f"PE{_pe_val:.0f}合理"
+        elif _pe_val >= 30:
+            _pe_score = 2
+            _pe_desc = f"PE{_pe_val:.0f}偏高"
+        else:
+            _pe_score = 3
+            _pe_desc = f"PE{_pe_val:.0f}偏低"
     else:
-        w_score = 0
-        w_desc = "板块无加分"
-    dimensions.append(DimensionScore("板块风口", w_score, 10, w_desc))
+        _pe_desc = "PE未知"
+        _pe_score = 3
+    # 价格在EMA20位置
+    if n >= 20 and ema20_local[-1] > 0:
+        _dist_to_ma = (price - ema20_local[-1]) / ema20_local[-1]
+        if _dist_to_ma > 0.02:
+            _ma_score = 5
+            _ma_desc = f"↑EMA20+{_dist_to_ma:.1%}"
+        elif _dist_to_ma > -0.02:
+            _ma_score = 3
+            _ma_desc = f"≈EMA20{_dist_to_ma:+.1%}"
+        else:
+            _ma_score = 0
+            _ma_desc = f"↓EMA20{_dist_to_ma:.1%}"
+    else:
+        _ma_score = 2
+        _ma_desc = "数据不足"
+    dimensions.append(DimensionScore("估值位置", _pe_score + _ma_score, 10, _pe_desc + " " + _ma_desc))
 
     # ===== 6. 追高风险 (10分) - 06-09升级 =====
     # 新规则：强趋势票(V10全买入/强庄买+资金流入)涨幅>5%给5分而非0分

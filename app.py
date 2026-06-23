@@ -2,16 +2,16 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from core.db import init_db, get_signals, get_watchlist, add_watchlist, remove_watchlist, get_positions
-from core.data import get_stock_list, get_top_gainers, get_top_losers, get_realtime_quote, get_realtime_quotes_batch, get_stock_history, get_market_indices
+from core.data import get_stock_list, get_top_gainers, get_top_losers, get_realtime_quote, get_realtime_quotes_batch, get_stock_history, get_market_indices, _is_trading_session
 from core.strategies import STRATEGY_REGISTRY, get_strategy_names
 from core.scanner import scan_market, scan_watchlist, get_market_overview
 from core.scorer import score_stock, score_batch
 from core.monitor import get_monitor, start_monitoring, stop_monitoring
 from core.alerts import send_feishu_card, send_batch_signals
-from core.ui import inject_global_css, render_theme_toggle
+from core.ui import inject_global_css, render_theme_toggle, render_page_header
 from version import VERSION, check_update
 
 # 初始化
@@ -35,12 +35,14 @@ with st.sidebar:
     st.caption("七条件共振 · 波段回调 · 多维评分")
     st.divider()
     
-    # 监控状态
+    # 监控状态（带数据源指示）
     monitor = get_monitor()
     status = monitor.get_status()
     
     if status["running"]:
         st.success(f"🟢 盯盘监控运行中")
+        _ds = "🟢 盘中实时" if _is_trading_session() else "🔵 盘后数据"
+        st.caption(f"📡 数据源: {_ds}")
         st.caption(f"监控 {status['watchlist_count']} 只 | {status['last_update']}")
         if st.button("⏹ 停止监控"):
             stop_monitoring()
@@ -125,6 +127,26 @@ st.html("""
     <p style="margin:5px 0 0 0; color:var(--text-secondary); font-size: 0.95em;">维加斯V10强庄策略 · 七条件共振 · 波段回调 · 多维评分 · 盯盘监控</p>
 </div>
 """)
+
+
+# 快捷导航卡片
+_nav_html = """
+<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
+<a href="/1_🔍_选股扫描" target="_self" style="flex:1; min-width:100px; text-decoration:none;">
+<div style="background:linear-gradient(135deg, #ff6b35 0%, #e55a28 100%); border-radius:10px; padding:12px; text-align:center; color:#fff; font-weight:600; font-size:0.9em; box-shadow:0 2px 8px rgba(255,107,53,0.3);">🔍 选股扫描</div>
+</a>
+<a href="/6_👁️_盯盘监控" target="_self" style="flex:1; min-width:100px; text-decoration:none;">
+<div style="background:linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); border-radius:10px; padding:12px; text-align:center; color:#fff; font-weight:600; font-size:0.9em; box-shadow:0 2px 8px rgba(37,99,235,0.3);">👁️ 盯盘监控</div>
+</a>
+<a href="/7_💼_持仓管理" target="_self" style="flex:1; min-width:100px; text-decoration:none;">
+<div style="background:linear-gradient(135deg, #059669 0%, #047857 100%); border-radius:10px; padding:12px; text-align:center; color:#fff; font-weight:600; font-size:0.9em; box-shadow:0 2px 8px rgba(5,150,105,0.3);">💼 持仓管理</div>
+</a>
+<a href="/8_🏆_V10评分" target="_self" style="flex:1; min-width:100px; text-decoration:none;">
+<div style="background:linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%); border-radius:10px; padding:12px; text-align:center; color:#fff; font-weight:600; font-size:0.9em; box-shadow:0 2px 8px rgba(124,58,237,0.3);">🏆 V10评分</div>
+</a>
+</div>
+"""
+st.html(_nav_html)
 
 # 市场概览（红涨绿跌）— 只拉一次全市场数据，三个模块共享
 st.subheader("🏛️ 市场概览")
@@ -292,7 +314,7 @@ else:
 
 # 涨跌幅排行
 st.subheader("📈 涨跌幅排行")
-tab1, tab2 = st.tabs(["🔴 涨幅榜", "🟢 跌幅榜"])
+tab1, tab2, tab3 = st.tabs(["🔴 涨幅榜", "🟢 跌幅榜", "📊 板块热点"])
 
 with tab1:
     try:
@@ -339,6 +361,33 @@ with tab2:
             )
     except Exception as e:
         st.error(f"获取跌幅榜失败: {e}")
+
+with tab3:
+    try:
+        from core.data import get_sector_ranking
+        sectors = get_sector_ranking(limit=20)
+        if sectors:
+            sector_data = []
+            for s in sectors:
+                pct = s.get("change_pct", 0)
+                sector_data.append({"板块": s["name"], "涨幅": pct})
+            if sector_data:
+                max_pct = max(abs(s["涨幅"]) for s in sector_data) or 1
+                html_parts = []
+                html_parts.append('<div style="display:flex; flex-direction:column; gap:4px;">')
+                for s2 in sorted(sector_data, key=lambda x: x["涨幅"], reverse=True)[:15]:
+                    pct2 = s2["涨幅"]
+                    bp = abs(pct2) / max_pct * 100
+                    bc = "#ef4444" if pct2 >= 0 else "#22c55e"
+                    sg = "▲" if pct2 >= 0 else "▼"
+                    html_parts.append(f'<div style="display:flex; align-items:center; gap:8px; padding:4px 8px; border-radius:4px; background:var(--bg-card);"><span style="width:100px; font-size:0.85em; color:var(--text-primary);">{s2["板块"]}</span><div style="flex:1; height:18px; background:var(--border-color); border-radius:3px; overflow:hidden;"><div style="width:{bp:.0f}%; height:100%; background:{bc}; border-radius:3px;"></div></div><span style="width:70px; text-align:right; color:{bc}; font-weight:600; font-size:0.85em;">{sg} {pct2:+.2f}%</span></div>')
+                html_parts.append("</div>")
+                st.html("".join(html_parts))
+        else:
+            st.info("暂无板块数据")
+    except Exception:
+        pass
+
 
 # 自选股行情
 st.subheader("⭐ 自选股实时行情")

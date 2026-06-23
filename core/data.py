@@ -7,6 +7,7 @@
 - 资金面：iFinD HTTP API > 10jqka > 缓存
 - 基本面：iFinD HTTP API
 """
+from __future__ import annotations
 import time
 import json
 import subprocess
@@ -38,19 +39,43 @@ _session.mount("http://", requests.adapters.HTTPAdapter(
 
 # 内存缓存
 _cache: dict[str, tuple[float, object]] = {}
-CACHE_TTL = 300  # 5分钟
+# 缓存TTL：盘中30秒（确保实时），非交易时段5分钟
+CACHE_TTL = 300
 
-
-def _get_cached(key: str):
+def _get_cached(key: str, intraday_override: bool = False):
+    """增强缓存读取：盘中自动缩短有效期至30秒"""
     if key in _cache:
         ts, data = _cache[key]
-        if time.time() - ts < CACHE_TTL:
+        effective_ttl = 30 if intraday_override and _is_trading_session() else CACHE_TTL
+        if time.time() - ts < effective_ttl:
             return data
     return None
 
 
 def _set_cache(key: str, data):
     _cache[key] = (time.time(), data)
+
+
+def clear_data_cache(pattern: str = ""):
+    """清空缓存。pattern非空时只清key包含pattern的缓存"""
+    if not pattern:
+        _cache.clear()
+        return
+    keys_to_del = [k for k in _cache if pattern in k]
+    for k in keys_to_del:
+        _cache.pop(k, None)
+
+
+def _is_trading_session() -> bool:
+    """精确判断当前是否为盘中交易时段
+    早盘9:30-11:30, 午盘13:00-15:00
+    """
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return False
+    h, m = now.hour, now.minute
+    t = h * 100 + m
+    return (930 <= t <= 1130) or (1300 <= t <= 1500)
 
 
 # ===== 新浪K线（首选 — 腾讯fqkline已被WAF封禁）=====
@@ -243,76 +268,88 @@ def _is_trading_day() -> bool:
 def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
     """盘中/盘后用腾讯实时行情拼一条当日K线到日K线末尾
     
-    新浪日K线盘中不更新（只到上一交易日收盘），
-    导致均线/趋势/信号全部滞后。用腾讯实时行情的
-    开高低收+成交量拼一条当日K线，让V10信号反映今天。
+    新浪日K线盘中不更新（只到上一交易日收盘）。
+    用腾讯实时行情的开高低收+成交量拼一条当日K线。
     
-    拼接条件：
-    1. 今天是工作日（周末不需要拼）
-    2. 新浪K线最后一条不是今天（避免重复）
-    3. 腾讯实时行情有成交量>0（确认今天确实有交易）
-    4. 实时行情OHLC与最后一条K线不完全一致（防止休市日缓存数据误拼）
+    增强版：
+    - 盘中交易时段始终尝试拼接（不限5分钟缓存）
+    - 支持重复调用：第二次调用时更新最后一根K线
+    - 更鲁棒的休市日防护
     """
     if df.empty:
         return df
-    if not _is_trading_day():
+    if not _is_trading_day() and not _is_trading_session():
         return df
-    # 检查最后一条是否已经是今天
+    
     today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
     last_date = df["date"].iloc[-1]
     if isinstance(last_date, str):
         last_date = pd.Timestamp(last_date)
-    if last_date.strftime("%Y-%m-%d") == today_str:
-        return df  # 已有今天数据（腾讯K线可能直接返回今天）
+    already_has_today = last_date.strftime("%Y-%m-%d") == today_str
     
     quote = get_realtime_quote(code)
     if not quote or not quote.get("price") or quote["price"] <= 0:
         return df
     
-    # 成交量换算：腾讯返回"手"，新浪K线用"股"，需 ×100
     vol = quote.get("volume", 0)
-    if vol <= 0:
-        return df  # 没有成交量说明还没成交（节假日/非交易日）
+    if vol <= 0 and _is_trading_session():
+        return df
     
-    # 休市日防护：腾讯返回缓存数据OHLC与昨天K线完全一致→不拼
-    last_bar = df.iloc[-1]
-    if (last_bar["open"] == quote["open"] and
-        last_bar["high"] == quote["high"] and
-        last_bar["low"] == quote["low"] and
-        abs(last_bar["close"] - quote["price"]) < 0.001):
-        return df  # OHLC与昨天完全一致，今天是休市日，腾讯返回缓存
+    # 休市日防护
+    if not _is_trading_session():
+        last_bar = df.iloc[-1]
+        if (abs(last_bar["open"] - quote["open"]) < 0.005 and
+            abs(last_bar["high"] - quote["high"]) < 0.005 and
+            abs(last_bar["low"] - quote["low"]) < 0.005 and
+            abs(last_bar["close"] - quote["price"]) < 0.005):
+            return df
     
     today_bar = pd.DataFrame([{
         "date": pd.Timestamp(today_str),
         "open": quote["open"],
-        "high": quote["high"],
-        "low": quote["low"],
+        "high": max(quote["high"], quote["price"]),
+        "low": min(quote["low"], quote["price"]) if quote["low"] > 0 else quote["price"] * 0.99,
         "close": quote["price"],
-        "volume": float(vol) * 100,  # 手→股
+        "volume": float(vol) * 100,
     }])
     
-    return pd.concat([df, today_bar], ignore_index=True)
-
-
-def get_stock_history(code: str, days: int = 250) -> pd.DataFrame:
+    if already_has_today:
+        df = df.copy()
+        df.iloc[-1] = today_bar.iloc[0]
+        return df
+    else:
+        return pd.concat([df, today_bar], ignore_index=True)
+def get_stock_history(code: str, days: int = 250, use_rt_cache: bool = True) -> pd.DataFrame:
     """获取K线（新浪优先，腾讯降级，akshare兜底）
     
-    优先级变更：2026-06 腾讯 web.ifzq.gtimg.cn/fqkline 被WAF封禁返回501，
-    新浪财经K线API成为首选数据源。
+    use_rt_cache=True（默认）使用30秒盘中缓存，盘中信号使用最新行情。
+    use_rt_cache=False 强制拉取，跳过缓存。
     
     盘中自动拼接当日K线（来自腾讯实时行情），确保信号实时。
     """
+    if use_rt_cache:
+        cache_key = f"rt_kline_{code}_{days}"
+        cached = _get_cached(cache_key, intraday_override=True)
+        if cached is not None and isinstance(cached, pd.DataFrame):
+            return cached
+    
     df = sina_klines(code, days)
     if not df.empty and len(df) >= 20:
         df = _append_today_kline(df, code)
+        if use_rt_cache and _is_trading_session():
+            _set_cache(f"rt_kline_{code}_{days}", df)
         return df
     df = tencent_klines(code, days)
     if not df.empty and len(df) >= 20:
         df = _append_today_kline(df, code)
+        if use_rt_cache and _is_trading_session():
+            _set_cache(f"rt_kline_{code}_{days}", df)
         return df
     df = akshare_klines(code, days)
     if not df.empty and len(df) >= 20:
         df = _append_today_kline(df, code)
+        if use_rt_cache and _is_trading_session():
+            _set_cache(f"rt_kline_{code}_{days}", df)
         return df
     return pd.DataFrame()
 

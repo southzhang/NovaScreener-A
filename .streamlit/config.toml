@@ -3,9 +3,3 @@ toolbarMode = "minimal"
 
 [browser]
 gatherUsageStats = false
-
-[ui]
-initialSidebarState = "expanded"
-
-[server]
-address = "0.0.0.0"

@@ -86,6 +86,8 @@ def scan_trend_swing(close, high, low, volume, open_price) -> Optional[TrendSwin
     vol_ma20 = float(np.mean(volume[max(0, i-19):i+1]))
     vol_recent = float(np.mean(volume[max(0, i-2):i+1]))
     vol_shrink = vol_recent < vol_ma20 * 0.95 if vol_ma20 > 0 else False
+    # 量价确认：今天量 < 3天前量（确认是缩量非爆量）
+    vol_decreasing = len(volume) >= 4 and volume[-1] < volume[-4]
     if not vol_shrink:
         return None
 
@@ -111,7 +113,11 @@ def scan_trend_swing(close, high, low, volume, open_price) -> Optional[TrendSwin
         K[j] = K[j-1] * 2/3 + rsv[j] / 3
     kdj_up = K[i] > K[i-1]
 
-    bounce = yang or kdj_up
+    # 反弹确认：阳线+真正收涨+有一定实体
+    real_up = close[i] > close[i-1]  # 真正收涨而非假阳线
+    body_pct = (close[i] - open_price[i]) / open_price[i] * 100 if open_price[i] > 0 else 0
+    strong_body = body_pct > 0.3  # 实体至少0.3%
+    bounce = (yang and real_up and strong_body) or (yang and kdj_up)
     if not bounce:
         return None
 

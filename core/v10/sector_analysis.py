@@ -5,6 +5,7 @@
 
 数据源：问财(iwencai) > 东方财富push2 API > 腾讯行情ETF降级
 """
+from __future__ import annotations
 
 import json
 import os

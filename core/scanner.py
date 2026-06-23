@@ -1,8 +1,9 @@
 """V10 全市场扫描器 — 多策略 + 多线程 + 过滤"""
+from __future__ import annotations
 import numpy as np
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from .data import get_stock_list, get_stock_history, get_realtime_quote, get_capital_flow
+from .data import get_stock_list, get_stock_history, get_realtime_quote, get_realtime_quotes_batch, get_capital_flow, clear_data_cache, _is_trading_session
 from .strategies import (
     STRATEGY_REGISTRY, V10Signal, PullbackSignal,
     scan_v10_full, scan_pullback,
@@ -12,14 +13,24 @@ from .db import save_signal
 
 
 def scan_single_stock(code: str, name: str, strategy_keys: list[str], params_dict: dict) -> list[dict]:
-    """扫描单只股票的所有策略"""
+    """扫描单只股票的所有策略（增强版：盘中自动使用实时行情）"""
     results = []
 
     try:
-        # 获取K线数据（V10需要200+根，250够用）
-        df = get_stock_history(code, days=250)
+        # 盘中扫描：先清K线缓存确保获取最新数据
+        rt_key = f"rt_kline_{code}_250"
+        if _is_trading_session():
+            clear_data_cache(rt_key)
+        
+        # 获取K线数据（V10需要200+根，250够用，盘中自动拼接当日K线）
+        df = get_stock_history(code, days=250, use_rt_cache=False)
         if df.empty or len(df) < 50:
             return results
+        
+        # 获取实时行情覆写最新价格
+        rt_quote = get_realtime_quote(code)
+        rt_price = rt_quote["price"] if rt_quote and rt_quote.get("price", 0) > 0 else df["close"].values[-1]
+        rt_pct = rt_quote["pct_change"] if rt_quote else 0
 
         # 转numpy数组
         close = df["close"].values.astype(np.float64)
@@ -34,13 +45,15 @@ def scan_single_stock(code: str, name: str, strategy_keys: list[str], params_dic
             if signal:
                 signal.code = code
                 signal.name = name
+                # 用实时行情覆写信号价格
+                signal_price = rt_price
                 results.append({
                     "type": "v10",
                     "code": code,
                     "name": name,
                     "strategy": "V10全买入",
                     "signal_type": signal.signal_type,
-                    "price": signal.price,
+                    "price": signal_price,
                     "score": signal.score,
                     "detail": signal.detail,
                     "tags": signal.tags,
@@ -150,6 +163,11 @@ def scan_market(
     """
     if params_dict is None:
         params_dict = {}
+    
+    # 盘中扫描开始前清空K线缓存，确保使用最新行情
+    if _is_trading_session():
+        clear_data_cache("rt_kline_")
+        print("[扫描] 盘中模式：已清空K线缓存，使用实时行情")
 
     # 获取股票池
     all_stocks = get_stock_list()

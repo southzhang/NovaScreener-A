@@ -196,7 +196,7 @@ def scan_v10_full(close, high, low, volume, open_price) -> Optional[V10Signal]:
     MACD金叉 = DIF[i] > DEA[i] and DIF[i-1] <= DEA[i-1]
 
     # 强庄信号
-    ST_FIRST = STRONG[i] and barslast_STRONG[i-1] >= 3
+    ST_FIRST = STRONG[i] and 1 <= barslast_STRONG[i-1] <= 10
     强庄信号 = 放量 and 阳线 and ST_FIRST
 
     # 信号组合
@@ -314,15 +314,22 @@ def scan_pullback(close, high, low, volume) -> Optional[PullbackSignal]:
         score += 1
         tags.append("接近EMA50")
 
+    # 3.5 量价确认：今天 < 3天前 → 真正缩量而非爆量上涨
+    vol_shrink_confirmed = len(volume) >= 4 and volume[-1] < volume[-4]
+
     # 3. 缩量回调 (0-2分)
     if len(volume) >= 20:
         vol_ma20 = np.mean(volume[-20:])
         vol_recent = np.mean(volume[-3:])
         if vol_ma20 > 0:
             vol_ratio = vol_recent / vol_ma20
-            if vol_ratio < 0.8:
+            if vol_ratio < 0.8 and vol_shrink_confirmed:
                 score += 2
                 tags.append("缩量回调✅")
+            elif vol_ratio < 0.8:
+                # 量缩了但无量价确认，给半分
+                score += 1
+                tags.append("缩量(待确认)")
             elif vol_ratio < 1.0:
                 score += 1
                 tags.append("量能收缩")
@@ -412,7 +419,10 @@ def strategy_bollinger_breakout(close, high, low, volume, open_price, params) ->
     middle = calc_ma(close, window)
     std = np.std(close[-window:], ddof=0)
     upper = middle[-1] + num_std * std
-    return bool(close[-1] > upper and close[-2] <= middle[-2] + num_std * np.std(close[-window-1:-1], ddof=0))
+    # 昨日上轨
+    prev_std = np.std(close[-window-1:-1], ddof=0) if len(close) > window + 1 else std
+    prev_upper = middle[-2] + num_std * prev_std if len(middle) >= 2 else upper
+    return bool(close[-1] > upper and close[-2] <= prev_upper)
 
 
 def strategy_kdj_golden(close, high, low, volume, open_price, params) -> bool:
@@ -423,8 +433,15 @@ def strategy_kdj_golden(close, high, low, volume, open_price, params) -> bool:
     highest = hhv_fast(high, 9)
     diff = highest - lowest
     rsv = np.where(diff > 0, (close - lowest) / diff * 100, 50.0)
-    K = ema_fast(rsv, 3)
-    D = ema_fast(K, 3)
+    # 标准KDJ：K=2/3*prev+RSV/3, D=2/3*prev+K/3
+    K = np.empty(len(rsv), dtype=float)
+    K[0] = rsv[0]
+    for j in range(1, len(rsv)):
+        K[j] = K[j-1] * 2/3 + rsv[j] / 3
+    D = np.empty(len(K), dtype=float)
+    D[0] = 50
+    for j in range(1, len(K)):
+        D[j] = D[j-1] * 2/3 + K[j] / 3
     return crossover(K, D)
 
 
@@ -442,7 +459,7 @@ STRATEGY_REGISTRY = {
         "name": "V10 全买入",
         "func": None,
         "default_params": {},
-        "desc": "通达信全买入公式：隧道+通道+QW+强庄+MACD+放量阳线",
+        "desc": "通达信全买入公式：隧道+通道+QW+强庄+非标MACD(20,80,9)+放量阳线",
         "is_v10": True,
     },
     "pullback": {

@@ -14,6 +14,10 @@ st.set_page_config(page_title="选股扫描", page_icon="🔍", layout="wide")
 inject_global_css()
 render_theme_toggle()
 render_page_header("🔍 选股扫描", "V10全买入 · 波段回调 · 经典策略 · 6维评分 · 买入推荐")
+from core.data import _is_trading_session
+_ds_icon = "🟢" if _is_trading_session() else "🔵"
+_ds_label = "盘中实时行情" if _is_trading_session() else "盘后历史数据"
+st.caption(f"📡 数据源: {_ds_icon} {_ds_label} | 🕐 {{datetime.now().strftime(\"%H:%M\")}}")
 
 # ===== V10 策略 =====
 st.html('<h2 style="margin-top:0;">🏆 V10 策略引擎</h2>')
@@ -29,8 +33,8 @@ with st.expander("📖 V10 策略详解", expanded=False):
     <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">📏 通道间距</td><td style="color:var(--text-secondary);">(EMA5-EMA20)/EMA20 > 0.8%</td></tr>
     <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">🔊 放量</td><td style="color:var(--text-secondary);">成交量 > 1.5x 5日均量</td></tr>
     <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">🔴 阳线</td><td style="color:var(--text-secondary);">收盘 > 开盘</td></tr>
-    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">💪 强庄控盘</td><td style="color:var(--text-secondary);">加权价格突变检测</td></tr>
-    <tr><td style="padding:6px 0;">📊 MACD金叉</td><td style="color:var(--text-secondary);">DIF(20,80) 上穿 DEA(9)</td></tr>
+    <tr style="border-bottom:1px solid var(--border-color);"><td style="padding:6px 0;">💪 强庄控盘</td><td style="color:var(--text-secondary);">加权价格突变+1-10天内出现</td></tr>
+    <tr><td style="padding:6px 0;">📊 MACD金叉(非标)</td><td style="color:var(--text-secondary);">DIF(EMA20-EMA80) 上穿 DEA(9)</td></tr>
     </table>
     <br>
     <strong style="color:var(--accent);">6维综合评分（100分制）：</strong><br>
@@ -38,7 +42,7 @@ with st.expander("📖 V10 策略详解", expanded=False):
     <br><br>
     <strong style="color:var(--accent);">信号分级：</strong><br>
     <span class="tag tag-up">🔴 全买入</span> 所有条件满足（最强）→ 强推80+分<br>
-    <span class="tag tag-accent">🟠 强庄买</span> 缺MACD金叉 → 关注60+分<br>
+    <span class="tag tag-accent">🟠 强庄买</span> 缺MACD金叉但有强庄 → 关注80分<br>
     <span class="tag tag-info">🟡 基础买</span> 缺强庄信号 → 观察40+分
     </div>
     """)
@@ -110,10 +114,14 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
         vol_arr = hist["volume"].values.astype(np.float64)
         open_arr = hist["open"].values.astype(np.float64)
 
-        from core.data import get_capital_flow, get_sector_score as calc_sector_score
-        flow_data = get_capital_flow(code)
-        capital_flow = flow_data.get("main_net_inflow", 0) if flow_data else 0
-        sector_score = calc_sector_score(code)
+        from core.data import get_realtime_quote
+        capital_flow = 0
+        sector_score = 0
+
+        # 获取实时行情获取PE
+        _rt_quote = get_realtime_quote(code)
+        _pe_val = _rt_quote.get("pe", 0) if _rt_quote else 0
+        _fundamental = {"pe": _pe_val}
 
         rec = generate_buy_recommendation(
             code=code, name=name,
@@ -123,6 +131,7 @@ def _render_recommendation(code, name, signal_type, score, change_pct=0):
             change_pct=change_pct,
             capital_flow=capital_flow,
             sector_score=sector_score,
+            fundamental=_fundamental,
         )
         if not rec:
             return None
@@ -552,6 +561,8 @@ if st.button("🚀 开始扫描", type="primary", width='stretch'):
         import time as _time
         _scan_start = _time.time()
         st.write("⏳ 正在扫描中...V10全市场扫描约需1-2分钟")
+        est_time = st.empty()  # 预计时间
+        elapsed_display = st.empty()  # 已用时间
         progress_bar = st.progress(0)
         status_text = st.empty()
         _scan_total_box = [0]  # 用list绕过nonlocal限制
@@ -586,6 +597,51 @@ _has_results = "scan_results" in st.session_state
 _results_list = st.session_state.get("scan_results", [])
 if _has_results:
     if _results_list:
+
+        # 扫描结果统计
+        _v10_count = len([r for r in _results_list if r.get("type") == "v10"])
+        _pb_count = len([r for r in _results_list if r.get("type") == "pullback"])
+        _cl_count = len([r for r in _results_list if r.get("type") == "classic"])
+        _full_count = len([r for r in _results_list if r.get("signal_type") == "全买入"])
+        _strong_count = len([r for r in _results_list if r.get("signal_type") == "强庄买"])
+        _base_count = len([r for r in _results_list if r.get("signal_type") == "基础买"])
+        # 统计卡片
+        _stats_html = """
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin:8px 0;">
+        <div style="flex:1; min-width:80px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px; text-align:center;">
+        <div style="color:var(--text-muted); font-size:0.8em;">V10信号</div>
+        <div style="font-size:1.3em; font-weight:700; color:var(--accent);" class="stat-v10">0</div>
+        </div>
+        <div style="flex:1; min-width:80px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px; text-align:center;">
+        <div style="color:var(--text-muted); font-size:0.8em;">🔴全买入</div>
+        <div style="font-size:1.3em; font-weight:700; color:var(--up-color);" class="stat-full">0</div>
+        </div>
+        <div style="flex:1; min-width:80px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px; text-align:center;">
+        <div style="color:var(--text-muted); font-size:0.8em;">🟠强庄买</div>
+        <div style="font-size:1.3em; font-weight:700; color:var(--warning-color);" class="stat-strong">0</div>
+        </div>
+        <div style="flex:1; min-width:80px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px; text-align:center;">
+        <div style="color:var(--text-muted); font-size:0.8em;">🟡基础买</div>
+        <div style="font-size:1.3em; font-weight:700; color:var(--info-color);" class="stat-base">0</div>
+        </div>
+        <div style="flex:1; min-width:80px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px; text-align:center;">
+        <div style="color:var(--text-muted); font-size:0.8em;">🔄波段</div>
+        <div style="font-size:1.3em; font-weight:700; color:var(--info-color);" class="stat-pb">0</div>
+        </div>
+        <div style="flex:1; min-width:80px; background:var(--bg-card); border:1px solid var(--border-color); border-radius:8px; padding:8px; text-align:center;">
+        <div style="color:var(--text-muted); font-size:0.8em;">📋经典</div>
+        <div style="font-size:1.3em; font-weight:700; color:var(--text-muted);" class="stat-cl">0</div>
+        </div>
+        </div>
+        """
+        # 用JS更新统计数字（或者简单用format）
+        _stats_html = _stats_html.replace('class="stat-v10">0</div>', f'class="stat-v10">{_v10_count}</div>')
+        _stats_html = _stats_html.replace('class="stat-full">0</div>', f'class="stat-full">{_full_count}</div>')
+        _stats_html = _stats_html.replace('class="stat-strong">0</div>', f'class="stat-strong">{_strong_count}</div>')
+        _stats_html = _stats_html.replace('class="stat-base">0</div>', f'class="stat-base">{_base_count}</div>')
+        _stats_html = _stats_html.replace('class="stat-pb">0</div>', f'class="stat-pb">{_pb_count}</div>')
+        _stats_html = _stats_html.replace('class="stat-cl">0</div>', f'class="stat-cl">{_cl_count}</div>')
+        st.html(_stats_html)
         st.success(f"🎯 共 {len(_results_list)} 个信号（上次扫描结果）")
         _render_results(_results_list)
 

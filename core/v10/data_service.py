@@ -3,10 +3,12 @@
 V10 统一数据读取层 — 供Streamlit页面调用
 封装所有缓存文件读取，容错设计（文件不存在/解析失败返回空/None）。
 """
+from __future__ import annotations
 import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -30,6 +32,7 @@ WATCHLIST_PATH = os.path.join(CACHE_DIR, "v10_watchlist.json")
 PREFETCH_PATH = os.path.join(CACHE_DIR, "v10_tail_prefetch.json")
 SUMMARY_PATH = os.path.join(CACHE_DIR, "v10_tail_summary.txt")
 TRACKER_PATH = os.path.join(CACHE_DIR, "tail_rec_tracker.json")
+TAIL_RESULTS_PATH = os.path.join(CACHE_DIR, "v10_tail_results.json")
 RECOMMEND_PATH = os.path.join(CACHE_DIR, "v10_tail_recommend.json")
 
 # V10脚本路径
@@ -78,15 +81,22 @@ def get_watchlist() -> dict:
     """
     raw = _safe_read_json(WATCHLIST_PATH, default=None)
     if raw is None:
-        return {"full_buy": [], "strong_buy": [], "base_buy": [], "scan_time": "", "count": 0}
+        return {"full_buy": [], "strong_buy": [], "base_buy": [], "scan_time": "", "count": 0, "from_today": False}
 
     stocks = raw.get("stocks", [])
+    
+    # 检查数据时效性：scan_time必须是今天
+    scan_time = raw.get("scan_time", "")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    from_today = scan_time.startswith(today_str)
+    
     result = {
         "full_buy": [s for s in stocks if s.get("signal") == "全买入"],
         "strong_buy": [s for s in stocks if s.get("signal") == "强庄买"],
         "base_buy": [s for s in stocks if s.get("signal") == "基础买"],
-        "scan_time": raw.get("scan_time", ""),
+        "scan_time": scan_time,
         "count": raw.get("count", len(stocks)),
+        "from_today": from_today,
     }
     return result
 
@@ -322,6 +332,154 @@ def check_freshness(filepath: str, max_minutes: int = 10) -> dict:
 
 
 # ===== 手动触发函数 =====
+
+
+def get_tail_recommendations() -> dict:
+    """
+    读取V10扫描结果，应用尾盘专属策略评分。
+    返回: {stocks: [TailEndSignal dicts], stats: {}}
+    仅14:20-15:00有实际意义，其他时段数据不足。
+    """
+    result = {"stocks": [], "stats": {}, "error": ""}
+    
+    # 1. 读取V10 watchlist（扫描结果）
+    watchlist = get_watchlist()
+    scan_time = watchlist.get("scan_time", "")
+    from_today = watchlist.get("from_today", False)
+    
+    # 时效性检查：非今天的信号不用于尾盘判断
+    if not from_today and scan_time:
+        result["error"] = f"V10信号数据来自 {scan_time}（非今日），请先点击下方「尾盘选股扫描」按钮获取今日信号"
+        return result
+    if not scan_time:
+        result["error"] = "暂无V10信号数据，请先点击下方「尾盘选股扫描」按钮"
+        return result
+    
+    all_candidates = []
+    
+    # 从所有信号组中收集候选股
+    for key in ["full_buy", "strong_buy", "base_buy"]:
+        for s in watchlist.get(key, []):
+            if isinstance(s, dict):
+                all_candidates.append(s)
+            elif isinstance(s, str):
+                all_candidates.append({"code": s, "name": s, "signal": key})
+    
+    if not all_candidates:
+        # 也尝试从prefetch中获取（仅当天数据）
+        prefetch = get_prefetch()
+        _pf_scan_time = prefetch.get("scan_time", "") or prefetch.get("update_time", "")
+        _pf_fresh = _pf_scan_time.startswith(today_str) if _pf_scan_time else False
+        if not _pf_fresh:
+            result["error"] = "今日无V10信号且预取数据也过期，请点击下方「尾盘选股扫描」按钮"
+            return result
+        for code, c in prefetch.get("candidates", {}).items():
+            sig = c.get("signal", "")
+            if sig:
+                all_candidates.append({
+                    "code": code,
+                    "name": c.get("name", code),
+                    "signal": sig,
+                    "signal_type": sig,
+                    "score": c.get("score", 60),
+                })
+    
+    if not all_candidates:
+        result["error"] = "无V10信号候选股，请先运行尾盘扫描"
+        return result
+    
+    # 2. 对每个候选股获取实时行情 + 执行尾盘评分
+    from core.tail_strategy import score_tail_end_candidate
+    from core.data import get_realtime_quote, get_realtime_quotes_batch
+    
+    codes = [s.get("code", "") for s in all_candidates if s.get("code")]
+    quotes = get_realtime_quotes_batch(codes)
+    quote_map = {q["code"]: q for q in quotes}
+    
+    tail_results = []
+    for s in all_candidates:
+        code = s.get("code", "")
+        q = quote_map.get(code, {})
+        if not q or not q.get("price", 0):
+            continue
+        
+        price = q.get("price", 0)
+        pct = q.get("pct_change", 0)
+        vol = q.get("volume", 0)  # 手
+        amount = q.get("amount", 0)  # 万元
+        
+        # 尾盘专属评分
+        ts = score_tail_end_candidate(
+            code=code,
+            name=s.get("name", code),
+            signal_type=s.get("signal_type", s.get("signal", "")),
+            v10_score=s.get("score", 60),
+            current_price=price,
+            pct_change=pct,
+            day_open=q.get("open", 0),
+            day_high=q.get("high", 0),
+            day_low=q.get("low", 0),
+            day_volume=vol,
+            day_amount=amount,
+            # 尾盘时段无法直接获取分钟数据，用以下近似
+            last_30min_volume=vol * 0.25,  # 估计尾盘30分钟占全天25%
+            last_15min_volume=vol * 0.12,  # 估计尾盘15分钟占全天12%
+            price_30min_ago=price * (1 - pct / 100 * 0.3),  # 按涨跌幅估算30分钟前价格
+            price_15min_ago=price * (1 - pct / 100 * 0.1),
+            price_5min_ago=price * (1 - pct / 100 * 0.02),
+            ema20=q.get("pre_close", price * 0.98),  # 近似EMA20=昨收附近
+            limit_up=q.get("limit_up", 0),
+            limit_down=q.get("limit_down", 0),
+        )
+        
+        if ts:
+            tail_results.append(ts)
+    
+    # 3. 排序：可进场优先，再按总分降序
+    action_order = {"可进场": 0, "观察": 1, "放弃": 2}
+    tail_results.sort(key=lambda x: (
+        action_order.get(x.tail_action, 3),
+        -x.total_tail_score
+    ))
+    
+    # 4. 保存结果
+    try:
+        os.makedirs(os.path.dirname(TAIL_RESULTS_PATH), exist_ok=True)
+        _now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        save_data = []
+        for ts in tail_results:
+            save_data.append({
+                "code": ts.code, "name": ts.name,
+                "signal_type": ts.signal_type,
+                "v10_score": ts.v10_score,
+                "tail_score": ts.total_tail_score,
+                "tail_action": ts.tail_action,
+                "tail_reason": ts.tail_reason,
+                "details": ts.tail_detail or {},
+            })
+        with open(TAIL_RESULTS_PATH, "w", encoding="utf-8") as f:
+            json.dump({
+                "update_time": _now,
+                "count": len(tail_results),
+                "stocks": save_data,
+            }, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    
+    # 5. 统计
+    buy_count = sum(1 for t in tail_results if t.tail_action == "可进场")
+    watch_count = sum(1 for t in tail_results if t.tail_action == "观察")
+    
+    result["stocks"] = tail_results
+    result["stats"] = {
+        "total": len(tail_results),
+        "buy": buy_count,
+        "watch": watch_count,
+        "v10_candidates": len(all_candidates),
+    }
+    
+    return result
+
 
 def _run_script(script_path: str, description: str, extra_args: list | None = None, timeout: int = 120) -> dict:
     """

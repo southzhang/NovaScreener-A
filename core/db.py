@@ -1,4 +1,5 @@
 """数据库模块 - SQLite 存储自选股、策略配置、信号记录"""
+from __future__ import annotations
 import sqlite3
 import json
 from contextlib import contextmanager
