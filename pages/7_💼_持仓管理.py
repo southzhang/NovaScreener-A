@@ -313,9 +313,9 @@ else:
             urg_color = urg_colors.get(advisor.urgency, "var(--text-muted)")
 
             # 风险条颜色
-            if advisor.risk_score >= 50:
+            if advisor.risk_score >= 60:
                 risk_bar_color = "var(--up-color)"
-            elif advisor.risk_score >= 30:
+            elif advisor.risk_score >= 35:
                 risk_bar_color = "var(--warning-color)"
             else:
                 risk_bar_color = "var(--down-color)"

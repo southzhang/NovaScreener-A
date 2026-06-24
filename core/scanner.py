@@ -17,10 +17,12 @@ def scan_single_stock(code: str, name: str, strategy_keys: list[str], params_dic
     results = []
 
     try:
-        # 盘中扫描：先清K线缓存确保获取最新数据
+        # 盘中扫描：清K线缓存确保获取最新数据（含新浪/腾讯日K缓存）
         rt_key = f"rt_kline_{code}_250"
         if _is_trading_session():
             clear_data_cache(rt_key)
+            clear_data_cache(f"sina_kline_{code}_")
+            clear_data_cache(f"tencent_kline_{code}_")
         
         # 获取K线数据（V10需要200+根，250够用，盘中自动拼接当日K线）
         df = get_stock_history(code, days=250, use_rt_cache=False)
@@ -164,10 +166,15 @@ def scan_market(
     if params_dict is None:
         params_dict = {}
     
-    # 盘中扫描开始前清空K线缓存，确保使用最新行情
+    # 盘中扫描开始前清空所有K线缓存，确保使用最新行情
+    # rt_kline_: 拼接了今日实时数据的K线缓存（30秒TTL）
+    # sina_kline_: 新浪日K线缓存（5分钟TTL，盘中不自动刷新）
+    # tencent_kline_: 腾讯日K线缓存（5分钟TTL，盘中不自动刷新）
     if _is_trading_session():
         clear_data_cache("rt_kline_")
-        print("[扫描] 盘中模式：已清空K线缓存，使用实时行情")
+        clear_data_cache("sina_kline_")
+        clear_data_cache("tencent_kline_")
+        print("[扫描] 盘中模式：已清空全部K线缓存，使用实时行情")
 
     # 获取股票池
     all_stocks = get_stock_list()

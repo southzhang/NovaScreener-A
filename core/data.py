@@ -265,16 +265,38 @@ def _is_trading_day() -> bool:
     return datetime.now().weekday() < 5
 
 
+def _trading_progress() -> float:
+    """计算当前交易进度(0~1)，用于盘中成交量线性外推全天量
+    
+    A股交易时间: 9:30-11:30(120分钟) + 13:00-15:00(120分钟) = 240分钟
+    盘中部分成交量需除以进度估算全天量，否则V10放量条件被严重低估。
+    """
+    now = datetime.now()
+    if now.weekday() >= 5:
+        return 1.0
+    h, m = now.hour, now.minute
+    minutes = h * 60 + m
+    if minutes < 570:          # 9:30前
+        return 0.0
+    if minutes <= 690:          # 9:30-11:30（上午120分钟）
+        return max(0.01, (minutes - 570) / 240)
+    if minutes < 780:           # 11:30-13:00 午休
+        return 0.5              # 上午120/240=0.5
+    if minutes <= 900:          # 13:00-15:00（下午120分钟）
+        return max(0.01, 0.5 + (minutes - 780) / 240)
+    return 1.0                  # 15:00后
+
+
 def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
     """盘中/盘后用腾讯实时行情拼一条当日K线到日K线末尾
     
     新浪日K线盘中不更新（只到上一交易日收盘）。
     用腾讯实时行情的开高低收+成交量拼一条当日K线。
     
-    增强版：
-    - 盘中交易时段始终尝试拼接（不限5分钟缓存）
+    关键修复（2026-06-24）：
+    - 盘中成交量按交易进度外推全天估算量，避免V10放量条件被低估
+    - 实时行情失败时打印告警，不再静默返回昨日数据
     - 支持重复调用：第二次调用时更新最后一根K线
-    - 更鲁棒的休市日防护
     """
     if df.empty:
         return df
@@ -289,11 +311,24 @@ def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
     
     quote = get_realtime_quote(code)
     if not quote or not quote.get("price") or quote["price"] <= 0:
+        print(f"[警告] {code} 实时行情获取失败，K线不含今日数据，V10信号可能滞后")
         return df
     
     vol = quote.get("volume", 0)
     if vol <= 0 and _is_trading_session():
+        print(f"[警告] {code} 盘中成交量为0，可能停牌或行情异常，K线不含今日数据")
         return df
+    
+    # === 关键修复：盘中成交量按交易进度外推全天 ===
+    # 腾讯实时行情的volume是盘中累计成交量（截至当前时刻），
+    # 而V10放量条件 volume[-1] > 1.5 * VOL_MA5[-1] 需要全天量级比较。
+    # 盘中14:00时累计量约仅全天的70%，直接比较会导致放量条件几乎不可能满足。
+    rt_vol = float(vol)
+    if _is_trading_session():
+        progress = _trading_progress()
+        if 0.01 < progress < 0.99:
+            # 线性外推 + 10%尾盘溢价（A股尾盘成交通常放量）
+            rt_vol = rt_vol / progress * 1.10
     
     # 休市日防护
     if not _is_trading_session():
@@ -310,7 +345,7 @@ def _append_today_kline(df: pd.DataFrame, code: str) -> pd.DataFrame:
         "high": max(quote["high"], quote["price"]),
         "low": min(quote["low"], quote["price"]) if quote["low"] > 0 else quote["price"] * 0.99,
         "close": quote["price"],
-        "volume": float(vol) * 100,
+        "volume": rt_vol * 100,
     }])
     
     if already_has_today:

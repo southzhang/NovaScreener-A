@@ -100,8 +100,9 @@ def analyze_position(
     v10_pass = 0
 
     if n >= 200:
+        ema200 = ema_fast(close, 200)
         # 隧道
-        tunnel_ok = close[i] > ema120[i] and close[i] > ema_fast(close, 200)[i] and ema120[i] > ema_fast(close, 200)[i]
+        tunnel_ok = close[i] > ema120[i] and close[i] > ema200[i] and ema120[i] > ema200[i]
         v10_conditions.append(("隧道多头", tunnel_ok))
         if tunnel_ok: v10_pass += 1
 
@@ -131,7 +132,6 @@ def analyze_position(
 
         # 放量
         vol_ma5 = np.mean(volume[max(0,i-4):i+1])
-        vol_ma20 = np.mean(volume[max(0,i-19):i+1])
         vol_up = volume[i] > vol_ma5 * 1.5 if vol_ma5 > 0 else False
         v10_conditions.append(("放量", vol_up))
         if vol_up: v10_pass += 1
@@ -141,15 +141,31 @@ def analyze_position(
         v10_conditions.append(("阳线", yang))
         if yang: v10_pass += 1
 
-        # MACD金叉
+        # MACD状态
         dif = ema_fast(close, 20) - ema_fast(close, 80)
         dea = ema_fast(dif, 9)
-        macd_golden = dif[i] > dea[i] and dif[i-1] <= dea[i-1]
         macd_bull = dif[i] > dea[i]
-        v10_conditions.append(("MACD", macd_bull))
+        macd_golden = dif[i] > dea[i] and dif[i-1] <= dea[i-1]
+        v10_conditions.append(("MACD多头", macd_bull))
         if macd_bull: v10_pass += 1
 
-        v10_state = f"V10 {v10_pass}/7 {'🟢共振' if v10_pass >= 6 else '🟡部分' if v10_pass >= 4 else '🔴缺失'}"
+        # 强庄控盘信号（新增——之前完全遗漏）
+        WEIGHT = (2 * close + open_price + high + low) * 100
+        WEIGHT_EMA = ema_fast(WEIGHT, 4)
+        VAR1 = np.where(WEIGHT_EMA > 0, (WEIGHT / WEIGHT_EMA - 1) * 100, 0.0)
+        VAR1_ABS = np.abs(VAR1)
+        VAR1_HH20 = hhv_fast(VAR1_ABS, 20)
+        strong_flag = (VAR1_ABS >= VAR1_HH20 * 0.9999) & (VAR1 > 0)
+        barslast_STRONG = 999.0
+        for k in range(n):
+            if strong_flag[k]:
+                barslast_STRONG = i - k
+        ST_FIRST = strong_flag[i] and barslast_STRONG >= 1 and barslast_STRONG <= 10
+        v10_conditions.append(("强庄控盘", ST_FIRST))
+        if ST_FIRST: v10_pass += 1
+
+        # V10总共8个条件
+        v10_state = f"V10 {v10_pass}/8 {'🟢共振' if v10_pass >= 7 else '🟡部分' if v10_pass >= 5 else '🔴缺失'}"
         for name, ok in v10_conditions:
             details.append(f"  {'✅' if ok else '❌'} {name}")
     else:
@@ -263,7 +279,8 @@ def analyze_position(
         # 动态止损：取 max(用户止损, EMA20-1.5ATR, 成本-2ATR)
         atr_stop = round(ema20[i] - 1.5 * atr, 2)
         cost_stop = round(buy_price - 2 * atr, 2)
-        dynamic_stop = max(stop_loss, atr_stop, cost_stop) if stop_loss > 0 else max(atr_stop, cost_stop)
+        # 止损取最低值（最严格）：确保距当前价最近的止损触发
+        dynamic_stop = min(stop_loss, atr_stop, cost_stop) if stop_loss > 0 else min(atr_stop, cost_stop)
 
         # 动态目标：根据趋势强度调整
         if trend_score >= 80:
@@ -371,13 +388,13 @@ def analyze_position(
         reason = f"风险评分{risk_score}，建议减仓降低风险"
 
     # === 清仓信号 ===
-    if risk_score >= 50:
+    if risk_score >= 60:
         action = "🔴 清仓"
         urgency = 5
         reason = f"风险评分{risk_score}，强烈建议清仓"
         if dynamic_stop > 0 and current_price <= dynamic_stop:
             reason += f"（已跌破止损¥{dynamic_stop}）"
-    elif risk_score >= 40 and pnl_pct < 0:
+    elif risk_score >= 50 and pnl_pct < 0:
         action = "🔴 清仓"
         urgency = 4
         reason = f"亏损+高风险{risk_score}，建议止损"

@@ -886,11 +886,25 @@ def _scan_one_rt(stock):
                 rt_high > 0 and abs(float(close_ext[-1]) - rt_price) < 0.001):
                 pass  # 休市日缓存数据，不追加
             else:
+                # 盘中成交量按交易进度外推全天量，避免V10放量条件被低估
+                est_vol = rt_vol if rt_vol > 0 else 0
+                now_t = datetime.now()
+                if rt_vol > 0 and now_t.weekday() < 5:
+                    _min = now_t.hour * 60 + now_t.minute
+                    if 570 <= _min < 900:
+                        if _min <= 690:       # 9:30-11:30
+                            progress = max(0.01, (_min - 570) / 240.0)
+                        elif _min < 780:       # 11:30-13:00 午休
+                            progress = 0.5
+                        else:                  # 13:00-15:00
+                            progress = max(0.01, 0.5 + (_min - 780) / 240.0)
+                        if 0.01 < progress < 0.99:
+                            est_vol = rt_vol / progress * 1.10
                 # 追加今日虚拟K线
                 close_ext = np.append(close_ext, rt_price)
                 high_ext = np.append(high_ext, rt_high if rt_high > 0 else rt_price)
                 low_ext = np.append(low_ext, rt_low if rt_low > 0 else rt_price)
-                vol_ext = np.append(vol_ext, rt_vol if rt_vol > 0 else 0)
+                vol_ext = np.append(vol_ext, est_vol if est_vol > 0 else 0)
                 open_ext = np.append(open_ext, rt_open if rt_open > 0 else rt_price)
 
     result = scan_stock_rt(close_ext, high_ext, low_ext, vol_ext, open_ext)
