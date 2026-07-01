@@ -24,6 +24,15 @@ from typing import List, Dict, Optional
 EXCLUDE_CODES = {'688', '689', '8', '4'}
 BATCH_SIZE = 100
 
+# ── 数据源适配 ──
+# 竞价阶段腾讯qt.gtimg.cn change_pct=0（非实时），
+# 优先用quote_adapter + push2覆盖涨跌幅
+try:
+    from quote_adapter import get_full_market_quotes as _qget_quotes
+    _USE_QUOTE_ADAPTER = True
+except ImportError:
+    _USE_QUOTE_ADAPTER = False
+
 
 @dataclass
 class AuctionStock:
@@ -158,7 +167,11 @@ def _fetch_tencent_batch(codes: list) -> dict:
 
 
 def _fetch_eastmoney_vol_ratio(codes: list) -> dict:
-    """东方财富量比修正"""
+    """东方财富量比修正 + 涨跌幅修正（push2竞价阶段实时数据）
+    
+    返回: {code: {vol_ratio, change_from_em, amount_from_em}}
+    push2在竞价阶段返回实时涨跌幅，而腾讯API返回0。
+    """
     results = {}
     sz = [c for c in codes if c.startswith('0') or c.startswith('3')]
     sh = [c for c in codes if c.startswith('6')]
@@ -179,8 +192,14 @@ def _fetch_eastmoney_vol_ratio(codes: list) -> dict:
                 if isinstance(item, dict) and 'f57' in item:
                     code = item['f57']
                     vol_r = item.get('f10')
+                    change_r = item.get('f3')
+                    amount_r = item.get('f6')
                     if vol_r is not None:
-                        res[code] = {'vol_ratio': float(vol_r)}
+                        res[code] = {
+                            'vol_ratio': float(vol_r),
+                            'change_from_em': float(change_r) if change_r is not None else None,
+                            'amount_from_em': float(amount_r) if amount_r is not None else None,
+                        }
             return res
         except Exception:
             return {}
@@ -617,7 +636,8 @@ def run_auction_scan(progress_callback=None) -> dict:
     v10_recommend_codes = set()   # V10推荐进场的票
     v10_observe_codes = set()     # V10观察池的票
 
-    # 尝试读取V10信号
+    # 尝试读取V10信号（仅今天的，过期数据不用于交叉验证）
+    _today_str = datetime.now().strftime("%Y-%m-%d")
     for path in [
         os.path.expanduser('~/.hermes/cache/v10_watchlist.json'),
         os.path.expanduser('~/.hermes/cache/v10_tail_prefetch.json'),
@@ -626,6 +646,10 @@ def run_auction_scan(progress_callback=None) -> dict:
             try:
                 with open(path) as f:
                     data = json.load(f)
+                # 时效性检查：scan_time/prefetch_time必须是今天
+                _st = data.get('scan_time', data.get('prefetch_time', ''))
+                if _st and not _st.startswith(_today_str):
+                    continue  # 跳过过期数据
                 for s in data.get('stocks', data.get('candidates', [])):
                     code = re.sub(r'\D', '', s.get('code', ''))
                     if code:
@@ -633,34 +657,45 @@ def run_auction_scan(progress_callback=None) -> dict:
             except Exception:
                 pass
 
-    # 尝试读取V10推荐结果（交叉验证用）
+    # 尝试读取V10推荐结果（交叉验证用，仅今天的）
     rec_path = os.path.expanduser('~/.hermes/cache/v10_tail_recommend.json')
     if os.path.exists(rec_path):
         try:
             with open(rec_path) as f:
                 rec_data = json.load(f)
-            for s in rec_data.get('recommend', []):
-                code = re.sub(r'\D', '', s.get('code', ''))
-                if code:
-                    v10_recommend_codes.add(code)
-            for s in rec_data.get('observe', []):
-                code = re.sub(r'\D', '', s.get('code', ''))
-                if code:
-                    v10_observe_codes.add(code)
+            _rec_scan = rec_data.get('scan_time', '')
+            if not _rec_scan or _rec_scan.startswith(_today_str):
+                for s in rec_data.get('recommend', []):
+                    code = re.sub(r'\D', '', s.get('code', ''))
+                    if code:
+                        v10_recommend_codes.add(code)
+                for s in rec_data.get('observe', []):
+                    code = re.sub(r'\D', '', s.get('code', ''))
+                    if code:
+                        v10_observe_codes.add(code)
         except Exception:
             pass
 
-    # 1. 腾讯全量行情
+    # 1. 全量行情（优先quote_adapter，fallback腾讯直连）
     if progress_callback:
         progress_callback(0.1, "获取竞价行情...")
-    pool = _gen_stock_pool()
-    all_stocks = {}
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = []
-        for i in range(0, len(pool), BATCH_SIZE):
-            futures.append(executor.submit(_fetch_tencent_batch, pool[i:i + BATCH_SIZE]))
-        for f in as_completed(futures):
-            all_stocks.update(f.result())
+    if _USE_QUOTE_ADAPTER:
+        try:
+            all_stocks = _qget_quotes(prefer_qmt=False)
+            # quote_adapter 返回的有时是 dict[code, dict]，确保格式
+        except Exception:
+            _USE_QUOTE_ADAPTER = False
+    
+    if not _USE_QUOTE_ADAPTER:
+        # fallback：腾讯直连
+        pool = _gen_stock_pool()
+        all_stocks = {}
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = []
+            for i in range(0, len(pool), BATCH_SIZE):
+                futures.append(executor.submit(_fetch_tencent_batch, pool[i:i + BATCH_SIZE]))
+            for f in as_completed(futures):
+                all_stocks.update(f.result())
 
     if len(all_stocks) < 100:
         return {"stocks": [], "sector_heat": {}, "stats": {"error": "数据不足，可能非交易时段"}}

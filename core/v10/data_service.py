@@ -142,6 +142,7 @@ def get_summary() -> str:
 def get_recommend() -> dict:
     """
     读取v10_tail_recommend.json，返回结构化推荐数据。
+    过期数据（scan_time非今天）返回空推荐，避免误导。
     
     Returns:
         {
@@ -163,6 +164,21 @@ def get_recommend() -> dict:
             "excluded": [],
             "summary": {"recommend_count": 0, "observe_count": 0, "excluded_count": 0, "in_cooldown": False},
         }
+    
+    # 时效性校验：scan_time必须是今天
+    scan_time = raw.get("scan_time", "")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if scan_time and not scan_time.startswith(today_str):
+        # 过期推荐不返回，只保留元信息
+        raw["recommend"] = []
+        raw["observe"] = []
+        raw["excluded"] = []
+        if isinstance(raw.get("summary"), dict):
+            raw["summary"]["recommend_count"] = 0
+            raw["summary"]["observe_count"] = 0
+            raw["summary"]["excluded_count"] = 0
+            raw["summary"]["_stale"] = True
+            raw["summary"]["_stale_reason"] = f"推荐数据来自{scan_time}，非今日，已忽略"
     return raw
 
 

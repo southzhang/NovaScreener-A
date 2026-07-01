@@ -271,6 +271,12 @@ for col, (label, f) in zip(fresh_cols, fresh_items):
 # ===================================================================
 st.html('<h2>📋 今日信号概览</h2>')
 
+# 数据时效性警告
+_wl_scan = watchlist.get("scan_time", "")
+_wl_today = watchlist.get("from_today", False)
+if _wl_scan and not _wl_today:
+    st.warning(f"⚠️ V10信号数据来自 {_wl_scan}（非今日），显示的信号可能是过期的。请点击下方「快速扫描」获取今日最新信号。")
+
 # 合并 watchlist 和 prefetch 的信号数据，prefetch 优先
 # 从 prefetch 中获取更丰富的信号信息
 prefetch_candidates = prefetch.get("candidates", {})
@@ -284,9 +290,17 @@ SIGNAL_GROUPS = [
 
 signal_cols = st.columns(3)
 has_any_signal = False
+# 检查watchlist是否今天的数据，过期数据不显示
+wl_from_today = watchlist.get("from_today", False)
 for col, (label, key, border_color) in zip(signal_cols, SIGNAL_GROUPS):
-    # 优先取 prefetch signals，其次取 watchlist
-    group_stocks = prefetch_signals.get(key, []) or watchlist.get(key, [])
+    # 优先取 prefetch signals；仅在watchlist是今天的数据时才回退
+    pf_group = prefetch_signals.get(key, [])
+    if pf_group:
+        group_stocks = pf_group
+    elif wl_from_today:
+        group_stocks = watchlist.get(key, [])
+    else:
+        group_stocks = []
     count = len(group_stocks)
     has_any_signal = has_any_signal or (count > 0)
     with col:
@@ -319,7 +333,14 @@ def _normalize_stock(s, prefetch_candidates=None):
     return {"code": str(s), "name": str(s), "price": 0, "change_pct": 0, "signal": ""}
 
 for label, key, border_color in SIGNAL_GROUPS:
-    group_stocks = prefetch_signals.get(key, []) or watchlist.get(key, [])
+    # 同上：仅prefetch有数据时用prefetch，watchlist仅在今天是今天的才回退
+    pf_group = prefetch_signals.get(key, [])
+    if pf_group:
+        group_stocks = pf_group
+    elif wl_from_today:
+        group_stocks = watchlist.get(key, [])
+    else:
+        group_stocks = []
     if not group_stocks:
         continue
     st.html(f'<h3 style="color:var(--text-primary);">{label} · {len(group_stocks)}只</h3>')

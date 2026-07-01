@@ -1,6 +1,6 @@
 """V10 量化盯盘选股 — 版本管理"""
 from __future__ import annotations
-VERSION = "v1.15.1"
+VERSION = "v1.15.2"
 REPO_OWNER = "southzhang"
 REPO_NAME = "NovaScreener-A"
 

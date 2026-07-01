@@ -83,7 +83,7 @@ def get_realtime(code):
 
 
 def load_watchlist():
-    """加载watchlist缓存"""
+    """加载watchlist缓存，检查时效性"""
     if not os.path.exists(WATCHLIST):
         return None
     with open(WATCHLIST) as f:
@@ -349,6 +349,15 @@ def main():
 
     stocks = data.get("stocks", [])
     scan_time = data.get("scan_time", "未知")
+
+    # === 时效性校验：watchlist必须是今天的数据 ===
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if scan_time and not scan_time.startswith(today_str):
+        log(f"⚠️ watchlist数据过期: scan_time={scan_time} (非今日 {today_str})")
+        log(f"   不生成推荐，避免用过期信号误导")
+        # 写空推荐JSON，清除旧的过期推荐
+        _build_recommend_json([], [], [], scan_time, cooldown=False)
+        sys.exit(0)
 
     if not stocks:
         log("📊 V10 尾盘信号摘要")

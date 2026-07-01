@@ -783,16 +783,25 @@ def main():
     em_vol = fetch_eastmoney_vol_ratio(candidate_codes) if candidate_codes else {}
     print(f"  → 修正 {len(em_vol)} 只", file=sys.stderr)
     
-    # 用东方财富真实量比覆盖
+    # 用东方财富真实量比 + 涨跌幅覆盖（竞价阶段腾讯change_pct=0，push2才是实时）
+    em_overrides = 0
     for code, em_data in em_vol.items():
         if code in all_stocks:
             all_stocks[code]['vol_ratio'] = em_data['vol_ratio']
             if em_data.get('amount_from_em'):
                 all_stocks[code]['amount_wan'] = em_data['amount_from_em'] / 10000
                 all_stocks[code]['amount_yuan'] = em_data['amount_from_em']
+            # 竞价阶段腾讯change_pct不可靠，用push2的f3覆盖
+            if em_data.get('change_from_em') is not None:
+                all_stocks[code]['change_pct'] = em_data['change_from_em']
+                em_overrides += 1
     for s in candidates_pool:
         if s['code'] in em_vol:
             s['vol_ratio'] = em_vol[s['code']]['vol_ratio']
+            if em_vol[s['code']].get('change_from_em') is not None:
+                s['change_pct'] = em_vol[s['code']]['change_from_em']
+    if em_overrides:
+        print(f"  → push2覆盖{em_overrides}只涨跌幅 (竞价实时修正)", file=sys.stderr)
 
     # 5.5 板块归属（并发获取，策略需要用）
     t_sector = time.time()
