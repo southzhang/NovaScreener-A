@@ -10,8 +10,8 @@ from datetime import datetime
 from quote_adapter import get_full_market_quotes, get_source_name
 
 # ── 常量 ──
-V10_WATCHLIST = '/Users/southzhang/.hermes/workspace/v10_watchlist.json'
-V10_TAIL_PREFETCH = '/Users/southzhang/.hermes/workspace/v10_tail_prefetch.json'
+V10_WATCHLIST = os.path.expanduser('~/.hermes/cache/v10_watchlist.json')
+V10_TAIL_PREFETCH = os.path.expanduser('~/.hermes/workspace/v10_tail_prefetch.json')
 
 # 排除板块（688=科创板, 北交所代码段）
 EXCLUDE_CODES = {'688', '689', '8', '4'}  # 8xxx=北交所, 4xxx=老三板
@@ -124,7 +124,7 @@ def _normalize_market_data(raw_stocks):
         vol_ratio = s.get('vol_ratio', 0)
         circulation = s.get('circ_cap', 0)
         if vol_ratio <= 0 and circulation > 0:
-            vol_ratio = round(amount_wan / max(circulation * 12.5 / 10000, 1), 1)
+            vol_ratio = round(amount_wan / max(circulation * 5.0 / 10000, 1), 1)
 
         all_stocks[code] = {
             'code': code, 'name': name, 'price': price,
@@ -202,7 +202,7 @@ def _supplement_qmt_fields(all_stocks):
     # 注意：amount_wan单位是万，circulation单位是亿
     for code, s in all_stocks.items():
         if s['vol_ratio'] <= 0 and s['circulation'] > 0:
-            s['vol_ratio'] = round(s['amount_wan'] / max(s['circulation'] * 12.5 / 10000, 1), 1)
+            s['vol_ratio'] = round(s['amount_wan'] / max(s['circulation'] * 5.0 / 10000, 1), 1)
 
     print(f"  → 腾讯补充 {supplemented} 只的缺失字段", file=sys.stderr)
 
@@ -210,22 +210,44 @@ def _supplement_qmt_fields(all_stocks):
 # ── 板块热度 ──
 
 def fetch_sector_rank():
-    """东方财富行业板块涨跌排行 TOP15"""
-    url = ("https://push2.eastmoney.com/api/qt/clist/get?cb=&pn=1&pz=15"
+    """东方财富行业板块涨跌排行 TOP15，降级到sector_analysis（腾讯ETF）"""
+    url = ("https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=15"
            "&po=1&np=1&fltt=2&invt=2&fid=f3&fs=m:90+t:2"
-           "&fields=f2,f3,f4,f12,f14")
+           "&fields=f2,f3,f4,f12,f14&_=" + str(int(time.time()*1000)))
     raw = fetch_url(url)
     if raw:
         try:
             data = json.loads(raw)
             items = data.get('data', {}).get('diff', [])
-            return {x.get('f14', ''): x.get('f3') for x in items if x.get('f14')}
+            if items:
+                result = {x.get('f14', ''): x.get('f3') for x in items if x.get('f14')}
+                if result:
+                    return result
         except:
             pass
+    
+    # 降级：使用sector_analysis模块（内含腾讯ETF降级逻辑）
+    print("  ⚠️ 东方财富板块API不可用，降级到sector_analysis", file=sys.stderr)
+    try:
+        from sector_analysis import get_sector_ranking
+        ranking = get_sector_ranking()
+        if ranking and isinstance(ranking, dict):
+            industry_list = ranking.get('industry', [])
+            if industry_list:
+                # sector_analysis返回的是列表格式，转为 {板块名: 涨幅} 字典
+                result = {}
+                for item in industry_list[:15]:
+                    if isinstance(item, dict) and 'name' in item:
+                        result[item['name']] = item.get('change', 0)
+                if result:
+                    return result
+    except Exception as e:
+        print(f"  ⚠️ sector_analysis降级也失败: {e}", file=sys.stderr)
+    
     return {}
 
 def get_stock_sector(code):
-    """查个股所属行业板块 — 东方财富"""
+    """查个股所属行业板块 — 东方财富，降级到ifind_sector_cache"""
     secid = f"1.{code}" if code.startswith('6') else f"0.{code}"
     url = f"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields=f57,f127"
     raw = fetch_url(url)
@@ -233,18 +255,61 @@ def get_stock_sector(code):
         try:
             data = json.loads(raw)
             industry = data.get('data', {}).get('f127', '')
-            return industry if industry else None
+            if industry:
+                return industry
         except:
             pass
+    
+    # 降级：使用ifind_sector_cache的板块映射
+    try:
+        import os, json as _json
+        cache_path = os.path.expanduser('~/.hermes/cache/ifind_sector.json')
+        if os.path.exists(cache_path):
+            with open(cache_path) as f:
+                sector_data = _json.load(f)
+            # ifind_sector.json格式: {code: {name:..., sw_l1:..., ths_l1:...}} 
+            entry = sector_data.get(code)
+            if isinstance(entry, dict):
+                result = entry.get('sw_l1') or entry.get('ths_l1') or entry.get('industry') or entry.get('sector')
+                if result:
+                    return result
+            elif isinstance(entry, str):
+                return entry
+    except Exception:
+        pass
+    
+    # 二次降级：sector_map.json（map字段）
+    try:
+        import os, json as _json
+        cache_path = os.path.expanduser('~/.hermes/cache/sector_map.json')
+        if os.path.exists(cache_path):
+            with open(cache_path) as f:
+                sector_map_data = _json.load(f)
+            # sector_map.json格式: {_time:..., map: {code: industry}}
+            sector_map_inner = sector_map_data.get('map', sector_map_data)
+            result = sector_map_inner.get(code)
+            if result:
+                return result
+    except Exception:
+        pass
+    
     return None
 
-def get_stock_sectors_batch(codes, max_workers=16):
-    """批量获取个股所属行业板块 — 东方财富并发"""
+def get_stock_sectors_batch(codes, max_workers=16, max_time=25):
+    """批量获取个股所属行业板块 — 东方财富并发
+    max_time: 总超时秒数，防止盘中API慢导致整体卡死
+    """
     import concurrent.futures
     result = {}
+    t0 = time.time()
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(get_stock_sector, code): code for code in codes}
         for future in concurrent.futures.as_completed(futures):
+            if (time.time() - t0) > max_time:
+                # 超时：取消未完成的futures
+                for f in futures:
+                    f.cancel()
+                break
             try:
                 sector = future.result(timeout=5)
                 code = futures[future]
@@ -293,7 +358,7 @@ def _fetch_klines_batch(codes, count=30):
         return result
     
     t0 = time.time()
-    max_time = 60
+    max_time = 28  # 🛡️ 06-28 从40s调到28s，留余量给全局100s deadline
     
     # 方案1: 东方财富K线API批量并发（主力，速度快）
     em_result = {}
@@ -410,7 +475,26 @@ def _fetch_klines_batch(codes, count=30):
 # ── 三策略 → 两策略重构 ──
 
 def exclude_st(name):
-    return 'ST' in name or '退' in name or 'N' in name
+    return 'ST' in name or '退' in name or name.startswith('N') or name.startswith('*ST')
+
+def _sector_match(sector, top_sectors):
+    """板块共振匹配：个股行业名与热门板块做双向子串匹配
+    top_sectors可能是ETF名称(如"新能源ETF南方")或行业名(如"半导体")
+    个股sector可能是申万行业(如"化学制品")或概念名
+    匹配规则：任一方向包含对方关键词(2字+)即算共振
+    """
+    if not sector or not top_sectors:
+        return False
+    sector_clean = sector.replace('Ⅱ', '').replace('Ⅲ', '').strip()
+    for hot_name in top_sectors:
+        hot_clean = hot_name.replace('ETF', '').replace('基金', '').strip()
+        # 个股行业名包含热门板块关键词
+        if len(hot_clean) >= 2 and hot_clean in sector_clean:
+            return True
+        # 热门板块名包含个股行业关键词
+        if len(sector_clean) >= 2 and sector_clean in hot_clean:
+            return True
+    return False
 
 def strategy_preferred(stocks, positions, top_sectors, sector_map):
     """竞价优选 — 小幅高开+放量+低位+板块共振
@@ -421,20 +505,21 @@ def strategy_preferred(stocks, positions, top_sectors, sector_map):
     for code, s in stocks.items():
         if exclude_st(s['name']):
             continue
-        # 流通市值：5-200亿（适中，避免大盘股和微盘股）
-        if s['circulation'] >= 200 or s['circulation'] < 5:
+        # 流通市值：5-200亿（宽松：None/0不直接排除，标记后降级处理）
+        circ = s.get('circulation', 0) or 0
+        if circ > 0 and (circ >= 200 or circ < 5):
             continue
-        # 高开幅度：1%-4%（小幅高开，还有空间）
+        # 高开幅度：1-4%（小幅高开，还有空间）
         if not (1 <= s['change_pct'] <= 4):
             continue
-        # 量比：2-15（温和放量，不能太夸张——对倒嫌疑）
-        if s['vol_ratio'] < 2 or s['vol_ratio'] > 15:
+        # 量比：>1.5（竞价阶段放宽，盘中要求2+）
+        if s['vol_ratio'] < 1.5:
             continue
-        # 竞价成交额：>1500万（确保不是无量高开）
-        if s['amount_wan'] <= 1500:
+        # 竞价成交额：>500万（从1500万放宽到500万，竞价阶段量本就少）
+        if s['amount_wan'] <= 500:
             continue
         
-        # 位置判断（有关键数据时）
+        # 位置判断（无K线数据时不排除，标记为未知降级）
         pos = positions.get(code, {})
         position_pct = pos.get('position_pct', -1)
         change_30d = pos.get('change_30d', 999)
@@ -445,12 +530,12 @@ def strategy_preferred(stocks, positions, top_sectors, sector_map):
             if position_pct < 60 and change_30d < 15:
                 is_low_position = True
         else:
-            # 无K线数据时，保守放行（降级处理）
-            is_low_position = None  # 未知
+            # 无K线数据，不排除，降级处理
+            is_low_position = None
         
-        # 板块共振
+        # 板块共振（关键词匹配：个股行业名与热门板块名做子串匹配）
         sector = sector_map.get(code, '')
-        in_hot_sector = sector in top_sectors
+        in_hot_sector = _sector_match(sector, top_sectors)
         
         # 计算优选得分
         score = 0
@@ -486,17 +571,18 @@ def strategy_aggressive(stocks, positions, top_sectors, sector_map):
     for code, s in stocks.items():
         if exclude_st(s['name']):
             continue
-        # 流通市值：<100亿（游资偏好小盘）
-        if s['circulation'] >= 100 or s['circulation'] <= 0:
+        # 流通市值：<100亿（宽松：None/0不排除）
+        circ = s.get('circulation', 0) or 0
+        if circ > 0 and circ >= 100:
             continue
-        # 高开幅度：4-7%（较高，追高风险大）
-        if not (4 <= s['change_pct'] <= 7):
+        # 高开幅度：3-7%（从4-7放宽到3-7，给更多机会）
+        if not (3 <= s['change_pct'] <= 7):
             continue
-        # 爆量：量比>4
-        if s['vol_ratio'] < 4:
+        # 爆量：量比>3（从>4放宽到>3）
+        if s['vol_ratio'] < 3:
             continue
-        # 成交额：>3000万
-        if s['amount_wan'] <= 3000:
+        # 成交额：>2000万（从3000万放宽到2000万）
+        if s['amount_wan'] <= 2000:
             continue
         
         # 位置判断
@@ -511,7 +597,7 @@ def strategy_aggressive(stocks, positions, top_sectors, sector_map):
             is_low_position = None
         
         sector = sector_map.get(code, '')
-        in_hot_sector = sector in top_sectors
+        in_hot_sector = _sector_match(sector, top_sectors)
         
         # 激进得分
         score = 0
@@ -577,7 +663,7 @@ def vibe_score(s):
 
 # ── 买入推荐评级 ──
 
-def buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_name, positions=None):
+def buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_name, positions=None, sentiment_data=None):
     """竞价选股买入推荐评级（对照推荐铁律七关验证中适用竞价场景的关卡）
     
     竞价核心核对：位置+高开幅度+量能+板块
@@ -631,18 +717,50 @@ def buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_name, po
     elif vibe_sc >= 1:
         reasons.append(f'Vibe{vibe_str}[{vibe_source}]({" ".join(vibe_tags)})')
     
-    # ── 关④ 板块风口 ──
+    # ── 关④ 板块风口（iFinD行业+东方财富排名+问财热度三数据源） ──
     sector = get_stock_sector(code)
-    if sector and sector in top_sectors:
+    if sector and _sector_match(sector, top_sectors):
         reasons.append(f'🔥{sector}')
+    # iFinD行业分类+板块共振（优先，精确匹配）
+    try:
+        import os as _os, sys as _sys
+        _sys.path.insert(0, _os.path.expanduser('~/.hermes/scripts'))
+        from ifind_sector_cache import match_hot_sector, get_stock_industry, get_sector_change_pct
+        ind_info = get_stock_industry(code)
+        ind_name = ind_info.get('name', name) if ind_info else name
+        _is_ifind_hot, _ifind_sector = match_hot_sector(code, ind_name)
+        if _is_ifind_hot and _ifind_sector != sector:
+            reasons.append(f'🔥{_ifind_sector}')
+        # 补充：显示所属行业板块涨幅
+        sw_l1 = ind_info.get('sw_l1', '') if ind_info else ''
+        ths_l1 = ind_info.get('ths_l1', '') if ind_info else ''
+        for sname in [sw_l1, ths_l1]:
+            if sname:
+                chg = get_sector_change_pct(sname)
+                if chg is not None:
+                    reasons.append(f'{sname}{chg:+.1f}%')
+                    break
+    except Exception:
+        pass
+    # 问财板块共振补充（降级）
+    if not any('🔥' in r for r in reasons):
+        try:
+            import os as _os, sys as _sys
+            _sys.path.insert(0, _os.path.expanduser('~/.hermes/scripts'))
+            from iwencai_sector import is_hot_sector
+            _is_iwencai_hot, _iwencai_sector = is_hot_sector(code, name)
+            if _is_iwencai_hot:
+                reasons.append(f'🔥问财({_iwencai_sector})')
+        except Exception:
+            pass
     
     # ── 关⑤ 追高安全垫（竞价版） ──
     price_limit_pct = 20.0 if code.startswith('3') else 10.0
     hard_limit_pct = price_limit_pct * 0.95  # 创业板19% / 主板9.5%
     
-    # 涨停一票否决
+    # 涨停一票否决（06-15修复：之前只降级观望，没真正排除）
     if abs(change_pct) >= hard_limit_pct:
-        warnings.append(f'⛔接近涨停{change_pct:+.1f}%一票否决')
+        return '⛔观望', [f'⛔接近涨停{change_pct:+.1f}%一票否决'], [f'⛔接近涨停{change_pct:+.1f}%一票否决']
     
     # 追高安全垫（竞价版，区分策略）
     if strategy_name == 'preferred':
@@ -661,11 +779,176 @@ def buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_name, po
         else:
             warnings.append(f'⚠️涨{change_pct:.1f}%超阈值{chase_limit}%，追高风险')
     
+    # ── 关⑥ 仓位提示（不拦截推荐，仅标注⚠️，仓位管理交给实盘盯盘） ──
+    try:
+        import sys as _sys, os as _os
+        _sys.path.insert(0, _os.path.expanduser('~/.hermes/scripts'))
+        from current_holdings import get_holdings, get_portfolio_value, get_cash
+        _h = get_holdings()
+        _pv = get_portfolio_value()
+        _cash_val = get_cash()
+        _n_pos = len(_h)
+        _total_pct = sum(h['shares'] * h['cost'] for h in _h) / _pv * 100 if _pv > 0 else 0
+        _buy_amt = (s.get('price', 0) or 0) * 100  # 最小1手
+        _new_pct = _buy_amt / _pv * 100 if _pv > 0 and _buy_amt > 0 else 0
+        if _n_pos >= 2:
+            warnings.append(f'⚠️已有{_n_pos}只持仓，注意仓位')
+        elif _n_pos == 1 and _total_pct + _new_pct > 30:
+            warnings.append(f'⚠️加仓后仓位将超30%')
+        elif _new_pct > 20:
+            warnings.append(f'⚠️单票仓位将超20%（{_new_pct:.1f}%）')
+    except Exception:
+        pass  # 读取持仓失败不阻塞竞价流程
+    
+    # ── 关⑥b 冷静期（连亏3次冷静2天） ──
+    try:
+        import json as _json, os as _os
+        from datetime import datetime as _dt
+        _tracker_path = _os.path.expanduser('~/.hermes/cache/tail_rec_tracker.json')
+        if _os.path.exists(_tracker_path):
+            with open(_tracker_path) as _f:
+                _tracker = _json.load(_f)
+            _streak_loss = _tracker.get('streak_loss', 0)
+            _cooldown = _tracker.get('cooldown_until', '')
+            if _cooldown:
+                try:
+                    _cd_time = _dt.strptime(_cooldown, '%Y-%m-%d')
+                    if _dt.now() < _cd_time:
+                        warnings.append(f'🧊冷静期中（连亏{_streak_loss}次，至{_cooldown}）')
+                except ValueError:
+                    pass
+            if _streak_loss >= 3:
+                warnings.append(f'🧊连亏{_streak_loss}次，触发冷静期')
+    except Exception:
+        pass  # 冷静期读取失败不阻塞
+    
     # ── 量能确认 ──
     if amount_wan >= 10000:
         reasons.append(f'放量{amount_wan/10000:.1f}亿')
     elif amount_wan >= 5000:
         reasons.append(f'成交{amount_wan/10000:.1f}亿')
+    
+    # ── 增强因子（五因子：资金面+大盘+换手+内外盘+PE/PB） ──
+    
+    # 资金面：优先实时push2代理，降级到缓存
+    _cf_inflow = None
+    _cf_pct = None
+    _cf_super_large = None
+    _cf_large = None
+    _cf_source = '缓存'
+    try:
+        from push2_proxy import fetch_capital_flow_realtime
+        _cf_rt = fetch_capital_flow_realtime([code])
+        if _cf_rt and code in _cf_rt:
+            _cf_data = _cf_rt[code]
+            _cf_inflow = _cf_data.get('main_net_inflow')
+            _cf_pct = _cf_data.get('main_net_pct')
+            _cf_super_large = _cf_data.get('super_large_net')
+            _cf_large = _cf_data.get('large_net')
+            _cf_source = '实时'
+    except Exception:
+        pass
+    # 降级到缓存
+    if _cf_inflow is None:
+        try:
+            import json as _json_cf
+            cf_path = os.path.expanduser('~/.hermes/cache/capital_flow.json')
+            if os.path.exists(cf_path):
+                with open(cf_path) as _f:
+                    _cf_all = _json_cf.load(_f)
+                _cf_item = _cf_all.get(code)
+                if _cf_item and isinstance(_cf_item, dict):
+                    _cf_inflow = _cf_item.get('main_net_inflow', 0)
+                    _cf_pct = _cf_item.get('main_net_pct')
+                elif _cf_item and isinstance(_cf_item, (int, float)):
+                    _cf_inflow = _cf_item
+        except Exception:
+            pass
+    
+    # 资金面否决 + 增强评分
+    if isinstance(_cf_inflow, (int, float)) and _cf_inflow != 0:
+        if _cf_inflow < -5000:
+            # 主力净流出超5000万 → 直接降为⚠️观望（资金面否决）
+            return '⚠️观望', reasons, warnings + [f'❌主力净流出{abs(_cf_inflow):.0f}万，资金面不支持({_cf_source})']
+        elif _cf_inflow < -2000:
+            # 主力净流出2000-5000万 → ★★☆降级
+            warnings.append(f'⚠️主力净流出{abs(_cf_inflow):.0f}万({_cf_source})')
+            if not in_v10:
+                return '⚠️观望', reasons, warnings + [f'❌主力净流出{abs(_cf_inflow):.0f}万，非V10票资金面不支持']
+        elif _cf_inflow > 3000:
+            # 主力净流入超3000万 → 正面信号
+            reasons.append(f'💰主力净流入{_cf_inflow:.0f}万({_cf_source})')
+            # 超大单+大单同步流入 → 加分
+            if isinstance(_cf_super_large, (int, float)) and _cf_super_large > 0 and isinstance(_cf_large, (int, float)) and _cf_large > 0:
+                reasons.append(f'💰超大+大单双流入(超大{_cf_super_large:.0f}万+大{_cf_large:.0f}万)')
+        # 主力占比显示
+        if isinstance(_cf_pct, (int, float)) and _cf_pct != 0:
+            if _cf_pct < -20:
+                warnings.append(f'📉主力占比{_cf_pct:.1f}%')
+            elif _cf_pct > 15:
+                reasons.append(f'📈主力占比{_cf_pct:.1f}%')
+    
+    # 大盘环境
+    try:
+        import urllib.request as _urlb
+        for _idx_code, _idx_prefix, _idx_name in [('000001', 'sh', '上证'), ('399001', 'sz', '深证')]:
+            try:
+                _url = f"https://qt.gtimg.cn/q={_idx_prefix}{_idx_code}"
+                _resp = _urlb.urlopen(_url, timeout=3)
+                _raw = _resp.read().decode('gbk', errors='ignore')
+                if '=' in _raw and '~' in _raw:
+                    _parts = _raw.split('=')[1].strip('"').split('~')
+                    if len(_parts) > 32:
+                        _idx_pct = float(_parts[32]) if _parts[32] else 0
+                        if _idx_pct < -2.0:
+                            if not in_v10:
+                                return '⚠️观望', reasons, warnings + [f'❌{_idx_name}{_idx_pct:+.1f}%暴跌']
+                            warnings.append(f'⚠️{_idx_name}{_idx_pct:+.1f}%弱市')
+                        elif _idx_pct < -1.0:
+                            warnings.append(f'⚠️{_idx_name}{_idx_pct:+.1f}%')
+            except Exception:
+                pass
+    except Exception:
+        pass
+    
+    # 换手率
+    _turnover = s.get('turnover', 0)
+    if _turnover > 15:
+        warnings.append(f'⚠️换手率{_turnover:.1f}%偏高')
+    
+    # 内外盘比
+    _outer = s.get('outer_vol', 0)
+    _inner = s.get('inner_vol', 0)
+    if _outer > 0 and _inner > 0:
+        _oi = _outer / _inner
+        if _oi > 1.5:
+            reasons.append(f'📈外/内{_oi:.1f}x')
+        elif _oi < 0.6:
+            warnings.append(f'⚠️外/内{_oi:.1f}x卖方主导')
+    
+    # PE极端过滤
+    _pe = s.get('pe_ttm', 0)
+    if _pe != 0:
+        if _pe < 0:
+            warnings.append('⚠️PE为负(亏损)')
+        elif _pe > 200:
+            if not in_v10:
+                return '⚠️观望', reasons, warnings + [f'❌PE={_pe:.0f}估值过高']
+            warnings.append(f'⚠️PE={_pe:.0f}估值偏高')
+    
+    # ── 情绪面（iFinD新闻情绪，竞价信息维度） ──
+    if sentiment_data and sentiment_data.get('news_count', 0) > 0:
+        _sent_score = sentiment_data.get('score', 0)
+        _sent_label = sentiment_data.get('label', '')
+        _sent_news = sentiment_data.get('news_count', 0)
+        if _sent_score >= 3:
+            reasons.append(f'📰情绪利好({_sent_score:+d},{_sent_news}条)')
+        elif _sent_score >= 1:
+            reasons.append(f'📰情绪偏利好({_sent_score:+d})')
+        elif _sent_score <= -3:
+            warnings.append(f'📰情绪利空({_sent_score:+d},{_sent_news}条)')
+        elif _sent_score <= -1:
+            warnings.append(f'📰情绪偏利空({_sent_score:+d})')
     
     # ── 策略标签 ──
     strategy_map = {
@@ -689,7 +972,7 @@ def buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_name, po
     
     if has_veto:
         stars = '⚠️观望'
-    elif is_low_position is True and in_v10 and (sector and sector in top_sectors) and not has_chase_warning:
+    elif is_low_position is True and in_v10 and (sector and _sector_match(sector, top_sectors)) and not has_chase_warning:
         stars = '★★★'  # 低价位+V10+板块+无追高 = 最强信号
     elif is_low_position is True and vibe_sc >= 2 and not has_chase_warning and not has_high_pos_warning:
         stars = '★★★'  # 低价位+Vibe强+无追高 = 最强信号
@@ -719,6 +1002,16 @@ def main():
     print(f"📊 竞价选股 v7 | {date_str} {time_str}")
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     sys.stdout.flush()
+
+    # 🛡️ 06-28 全局超时兜底：cron硬编码120s超时，脚本自己要在100s处提前收尾
+    # 超过100s时输出已抓数据并退出，避免被cron杀掉导致247B超时日志
+    GLOBAL_DEADLINE = 100
+
+    def _overdue():
+        return (time.time() - t0) > GLOBAL_DEADLINE
+
+    def _remaining():
+        return max(0, int(GLOBAL_DEADLINE - (time.time() - t0)))
 
     # 1. 统一行情获取 — 竞价/开盘初段QMT的change_pct全为0，必须强制用腾讯
     # 竞价09:28跑，QMT返回的现价=昨收价导致change_pct=0，所有高开票被漏掉
@@ -769,13 +1062,21 @@ def main():
             continue
         if not (1 <= s['change_pct'] <= 7):
             continue
-        # 腾讯/QMT端只保留量比>1.5的即可
-        if s['vol_ratio'] <= 1.5:
+        # 腾讯/QMT端只保留量比>1.0的即可（竞价阶段量比偏低，放宽到>1.0）
+        if s['vol_ratio'] <= 1.0:
             continue
-        if s['amount_wan'] <= 1500:
+        # 竞价成交额>300万（从1500万放宽到300万，竞价阶段量本就少）
+        if s['amount_wan'] <= 300:
             continue
         candidates_pool.append(s)
     print(f"  → 快筛候选池: {len(candidates_pool)}只", file=sys.stderr)
+    
+    # 候选池封顶：按成交额降序取top150，防止盘中350+只候选拖垮K线/板块批量获取
+    MAX_CANDIDATES = 150
+    if len(candidates_pool) > MAX_CANDIDATES:
+        candidates_pool.sort(key=lambda s: s.get('amount_wan', 0), reverse=True)
+        candidates_pool = candidates_pool[:MAX_CANDIDATES]
+        print(f"  → 封顶{MAX_CANDIDATES}只（按成交额降序）", file=sys.stderr)
     
     # 5. 东方财富真实量比修正
     candidate_codes = [s['code'] for s in candidates_pool]
@@ -783,12 +1084,19 @@ def main():
     em_vol = fetch_eastmoney_vol_ratio(candidate_codes) if candidate_codes else {}
     print(f"  → 修正 {len(em_vol)} 只", file=sys.stderr)
     
+<<<<<<< Updated upstream
     # 用东方财富真实量比 + 涨跌幅覆盖（竞价阶段腾讯change_pct=0，push2才是实时）
     em_overrides = 0
+=======
+    # 用东方财富真实量比覆盖（竞价时段东方财富量比可能为0/空，不能覆盖腾讯有效值）
+>>>>>>> Stashed changes
     for code, em_data in em_vol.items():
         if code in all_stocks:
-            all_stocks[code]['vol_ratio'] = em_data['vol_ratio']
-            if em_data.get('amount_from_em'):
+            em_vr = em_data.get('vol_ratio', 0)
+            # 只在东方财富返回有效量比(>0)时覆盖，避免竞价时段0值覆盖腾讯有效量比
+            if em_vr > 0:
+                all_stocks[code]['vol_ratio'] = em_vr
+            if em_data.get('amount_from_em') and em_data['amount_from_em'] > 0:
                 all_stocks[code]['amount_wan'] = em_data['amount_from_em'] / 10000
                 all_stocks[code]['amount_yuan'] = em_data['amount_from_em']
             # 竞价阶段腾讯change_pct不可靠，用push2的f3覆盖
@@ -797,20 +1105,32 @@ def main():
                 em_overrides += 1
     for s in candidates_pool:
         if s['code'] in em_vol:
+<<<<<<< Updated upstream
             s['vol_ratio'] = em_vol[s['code']]['vol_ratio']
             if em_vol[s['code']].get('change_from_em') is not None:
                 s['change_pct'] = em_vol[s['code']]['change_from_em']
     if em_overrides:
         print(f"  → push2覆盖{em_overrides}只涨跌幅 (竞价实时修正)", file=sys.stderr)
+=======
+            em_vr = em_vol[s['code']].get('vol_ratio', 0)
+            # 同理：只覆盖有效量比
+            if em_vr > 0:
+                s['vol_ratio'] = em_vr
+>>>>>>> Stashed changes
 
     # 5.5 板块归属（并发获取，策略需要用）
     t_sector = time.time()
-    sector_map = get_stock_sectors_batch(candidate_codes, max_workers=16)
+    sector_budget = min(25, _remaining() - 5)  # 🛡️ 06-28 动态预算，留5s给K线和后续步骤
+    sector_map = get_stock_sectors_batch(candidate_codes, max_workers=16) if sector_budget > 5 else {}
     print(f"  → 板块归属: {len(sector_map)}只, 耗时{time.time()-t_sector:.1f}s", file=sys.stderr)
 
     # 5.6 K线位置计算（对候选池拉30日K线）
     print(f"\n🔄 [5.5/6] K线位置计算（{len(candidate_codes)}只候选票）...", file=sys.stderr)
-    positions = _fetch_klines_batch(candidate_codes, count=30)
+    if _overdue():
+        print(f"  ⚠️ 全局超时({GLOBAL_DEADLINE}s)已到，跳过K线拉取", file=sys.stderr)
+        positions = {}
+    else:
+        positions = _fetch_klines_batch(candidate_codes, count=30)
     print(f"  → 位置数据: {len(positions)}只", file=sys.stderr)
 
     # 6. 两策略正式筛选（用东方财富修正后的数据 + 位置 + 板块）
@@ -827,6 +1147,41 @@ def main():
     vibes = {code: vibe_score(s) for code, s in selected.items()}
 
     print(f"  优选:{len(pref)} 激进:{len(aggr)} → 合并{len(selected)}只", file=sys.stderr)
+
+    # ── 提前计算买入推荐评级（供顶部汇总使用）──
+    all_selected_for_rating = list(selected.values())
+    rated = []
+    for s in all_selected_for_rating:
+        s_strategies = []
+        if s in pref: s_strategies.append('preferred')
+        if s in aggr: s_strategies.append('aggressive')
+        strategy_key = s_strategies[0] if s_strategies else 'preferred'
+        # positions 已就绪，sentiment 待获取（buy_recommendation 可选接入）
+        stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_key, positions, sentiment_data=None)
+        rated.append((s, stars, reasons, warnings))
+    star_order = {'★★★': 0, '★★☆': 1, '★☆☆': 2, '⚠️观望': 3}
+    rated.sort(key=lambda x: star_order.get(x[1], 9))
+    top_picks_prelim = [r for r in rated if r[1] in ('★★★', '★★☆')]
+
+    # 6.5 情绪面预获取（iFinD新闻情绪，仅对选中股票批量获取）
+    sentiment_cache = {}
+    if selected:
+        print(f"\n🔄 [6.5/6] 情绪面获取（{len(selected)}只）...", file=sys.stderr)
+        try:
+            from ifind_news_sentiment import get_stock_sentiment
+            for code, s in selected.items():
+                try:
+                    _sent = get_stock_sentiment(code, s['name'], size=5)
+                    if _sent and _sent['news_count'] > 0:
+                        sentiment_cache[code] = _sent
+                        print(f"  {s['name']}({code}): {_sent['label']}({_sent['score']:+d},{_sent['news_count']}条)", file=sys.stderr)
+                except Exception:
+                    pass
+            print(f"  → 情绪面获取完成: {len(sentiment_cache)}/{len(selected)}只有新闻数据", file=sys.stderr)
+        except ImportError:
+            print(f"  → ifind_news_sentiment模块不可用，跳过情绪面", file=sys.stderr)
+        except Exception as e:
+            print(f"  → 情绪面获取异常: {str(e)[:50]}", file=sys.stderr)
 
     # ── 输出报告 ──
     report = []
@@ -845,6 +1200,30 @@ def main():
         p(f"📊 **今日热点板块TOP5**: {heat_str}")
         p()
 
+    # ── 🚨🚨🚨 可买入 🚨🚨🚨 (顶部醒目汇总) ──
+    if top_picks_prelim:
+        p()
+        p("━━━ **🚨🚨🚨 可买入 🚨🚨🚨** ━━━")
+        for s, stars, reasons, warnings in top_picks_prelim:
+            pos = positions.get(s['code'], {})
+            pos_str = f" 位{pos.get('position_pct', '?')}%" if pos else ""
+            in_v10_tag = " 📌V10" if s['code'] in v10_codes else ""
+            strategy_tag = ""
+            if s in pref: strategy_tag = "优选"
+            if s in aggr: strategy_tag = "激进"
+            reason_1line = ' | '.join(reasons[:2]) if reasons else ''
+            p(f"  {stars} **{s['code']} {s['name']}** +{s['change_pct']:.1f}% 量{s['vol_ratio']:.1f} 成{s['amount_wan']/10000:.1f}亿{pos_str}{in_v10_tag} [{strategy_tag}]")
+            if reason_1line:
+                p(f"    理由: {reason_1line}")
+            if warnings:
+                p(f"    ⚠️ {' '.join(warnings)}")
+        p()
+    else:
+        p()
+        p("━━━ **🚨🚨🚨 可买入 🚨🚨🚨** ━━━")
+        p("  今日暂无★★★/★★☆推荐标的")
+        p()
+
     # ── 竞价优选 ──
     p(f"━━━ **🟢 竞价优选** ({len(pref)}只) — 小幅高开+放量+低位+板块共振 ━━━")
     if pref:
@@ -854,7 +1233,7 @@ def main():
             sc, tags = vibes.get(s['code'], (0, []))
             tag_str = f" | {' '.join(tags)}" if tags else ""
             limit_tag = f" 涨停{s['limit_up']:.2f}/跌停{s['limit_down']:.2f}" if s.get('limit_up') else ""
-            stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, 'preferred', positions)
+            stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, 'preferred', positions, sentiment_data=sentiment_cache.get(s['code']))
             reason_str = ' | '.join(reasons)
             pos = positions.get(s['code'], {})
             pos_str = f" 位{pos.get('position_pct', '?')}%" if pos else ""
@@ -875,7 +1254,7 @@ def main():
             sc, tags = vibes.get(s['code'], (0, []))
             tag_str = f" | {' '.join(tags)}" if tags else ""
             limit_tag = f" 涨停{s['limit_up']:.2f}/跌停{s['limit_down']:.2f}" if s.get('limit_up') else ""
-            stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, 'aggressive', positions)
+            stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, 'aggressive', positions, sentiment_data=sentiment_cache.get(s['code']))
             reason_str = ' | '.join(reasons)
             pos = positions.get(s['code'], {})
             pos_str = f" 位{pos.get('position_pct', '?')}%" if pos else ""
@@ -903,7 +1282,7 @@ def main():
             # 用第一个策略做评级
             primary_strategy = strategies[0] if strategies else 'preferred'
             strategy_key = {'竞价优选': 'preferred', '竞价激进': 'aggressive'}.get(primary_strategy, 'preferred')
-            stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_key, positions)
+            stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_key, positions, sentiment_data=sentiment_cache.get(s['code']))
             reason_str = ' | '.join(reasons)
             pos = positions.get(s['code'], {})
             pos_str = f" 位{pos.get('position_pct', '?')}%" if pos else ""
@@ -913,24 +1292,21 @@ def main():
                 p(f"    {' '.join(warnings)}")
         p()
     
-    # ── 买入推荐汇总 ──
+    # ── 买入推荐详情（复用顶部已计算的 rated，补充情绪面）──
+    # 用情绪面重新计算一次 rated（sentiment 在顶部评级之后才获取）
     all_selected = list(selected.values())
     rated = []
     for s in all_selected:
-        # 确定策略归属
         s_strategies = []
         if s in pref: s_strategies.append('preferred')
         if s in aggr: s_strategies.append('aggressive')
         strategy_key = s_strategies[0] if s_strategies else 'preferred'
-        stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_key, positions)
+        stars, reasons, warnings = buy_recommendation(s, v10_codes, sector_heat, top_sectors, strategy_key, positions, sentiment_data=sentiment_cache.get(s['code']))
         rated.append((s, stars, reasons, warnings))
-    
-    # 按星级排序：★★★ > ★★☆ > ★☆☆ > ⚠️
     star_order = {'★★★': 0, '★★☆': 1, '★☆☆': 2, '⚠️观望': 3}
     rated.sort(key=lambda x: star_order.get(x[1], 9))
-    
-    # 只输出★★★和★★☆
     top_picks = [r for r in rated if r[1] in ('★★★', '★★☆')]
+
     if top_picks:
         p(f"━━━ **🎯 买入推荐** ({len(top_picks)}只) ━━━")
         for s, stars, reasons, warnings in top_picks:
@@ -942,6 +1318,11 @@ def main():
             p(f"    {reason_str}")
             if warn_str:
                 p(f"    {warn_str}")
+            # 情绪面新闻标题（仅推荐票展示）
+            _sent = sentiment_cache.get(s['code'])
+            if _sent and _sent.get('news_count', 0) > 0:
+                for _title in _sent.get('top_news', [])[:2]:
+                    p(f"    📰 {_title}")
         p()
         p("💡 优选信号：小幅高开+放量+低位+板块共振 → 开盘后择机介入")
         p("💡 激进信号：高开高打+爆量 → 需盯盘确认，不符合则放弃")
@@ -954,8 +1335,8 @@ def main():
     p(f"━━━ 📊 统计 ━━━")
     data_source = source_name if raw_stocks else "无数据"
     p(f"数据源: {data_source} | 全市场扫描: {len(all_stocks)}只 | 板块热点: {len(sector_heat)}个 | K线位置: {len(positions)}只")
-    p(f"选股结果: 优选{len(pref)} 激进{len(aggr)} | V10交叉: {len(cross)}只")
-    p(f"⏱ 耗时: {time.time()-t0:.1f}秒")
+    p(f"选股结果: 优选{len(pref)} 激进:{len(aggr)} | V10交叉: {len(cross)}只")
+    p(f"情绪面: {len(sentiment_cache)}/{len(selected)}只有新闻数据 | ⏱ 耗时: {time.time()-t0:.1f}秒")
 
     # ── 保存结果供V10尾盘做双线印证 ──
     output = {
@@ -971,6 +1352,9 @@ def main():
                           'change_pct': s['change_pct'], 'limit_up': s.get('limit_up', 0),
                           'limit_down': s.get('limit_down', 0)}
                    for code, s in selected.items()},
+        'sentiment': {code: {'score': _s['score'], 'label': _s['label'], 'news_count': _s['news_count'],
+                              'top_news': _s.get('top_news', [])[:2], 'summary': _s.get('summary', '')}
+                      for code, _s in sentiment_cache.items()},
     }
     out_path = '/tmp/auction_v7_result.json'
     with open(out_path, 'w') as f:

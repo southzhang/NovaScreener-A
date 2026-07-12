@@ -56,7 +56,10 @@ def validate_recommendations():
     today = datetime.now().strftime("%Y-%m-%d")
     
     for rec in cache["recommendations"]:
-        if rec["validated"]:
+        # 防御：跳过格式不正确的记录（缺少必要字段）
+        if "stocks" not in rec or "date" not in rec:
+            continue
+        if rec.get("validated"):
             continue
         
         rec_date = rec["date"]

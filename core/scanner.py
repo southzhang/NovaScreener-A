@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from .data import get_stock_list, get_stock_history, get_realtime_quote, get_realtime_quotes_batch, get_capital_flow, clear_data_cache, _is_trading_session
 from .strategies import (
     STRATEGY_REGISTRY, V10Signal, PullbackSignal,
-    scan_v10_full, scan_pullback,
+    scan_v10_full, scan_pullback, scan_v12_hunter,
 )
 from .trend_swing import scan_trend_swing
 from .db import save_signal
@@ -77,6 +77,33 @@ def scan_single_stock(code: str, name: str, strategy_keys: list[str], params_dic
                     "score": signal.score,
                     "detail": signal.detail,
                     "tags": signal.tags,
+                })
+
+        # V12 猎庄（改性KDJ入场）
+        if "v12_hunter" in strategy_keys and len(close) >= 80:
+            signal = scan_v12_hunter(close, high, low, volume, open_p)
+            if signal:
+                signal.code = code
+                signal.name = name
+                signal_type = "V12双共振" if signal.v10_resonance else ("V12金叉" if signal.signal else "V12信号")
+                # V12信号分数逻辑：>80分=强推, >=60分=关注
+                results.append({
+                    "type": "v12",
+                    "code": code,
+                    "name": name,
+                    "strategy": "V12 猎庄",
+                    "signal_type": signal_type,
+                    "price": rt_price,
+                    "score": signal.score,
+                    "detail": {
+                        "var1": signal.var1,
+                        "trend": signal.trend,
+                        "tunnel": signal.tunnel,
+                        "v10_resonance": signal.v10_resonance,
+                        "buildup": signal.buildup,
+                        "reason": signal.reason,
+                    },
+                    "tags": [signal.reason],
                 })
 
         # 趋势波段

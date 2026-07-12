@@ -35,7 +35,7 @@ def fetch_url(url, timeout=8):
 # ── 实时行情 ──────────────────────────────────────────────
 def get_realtime(code):
     """返回 {price, change_pct, amount_wan, circ_yi} 或 None"""
-    prefix = "sh" if code.startswith("6") else "sz"
+    prefix = "sh" if code.startswith(("6", "5")) else "sz"
     url = f"https://qt.gtimg.cn/q={prefix}{code}"
     text = fetch_url(url)
     if not text or "=" not in text:
@@ -79,7 +79,7 @@ def _is_trading_day() -> bool:
 
 def get_amplitude_percentile(code):
     """计算当前振幅在近30日的分位数(0-100)（盘中/盘后自动拼接今日数据）"""
-    prefix = "sh" if code.startswith("6") else "sz"
+    prefix = "sh" if code.startswith(("6", "5")) else "sz"
     symbol = f"{prefix}{code}"
     url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={symbol},day,,,30,qfq"
     text = fetch_url(url)
@@ -152,7 +152,7 @@ def load_fundamental_data():
 
 # ── 评分核心 ──────────────────────────────────────────────
 def score_stock(code, name, signal_level, key_levels=None, capital_flow=None, fundamental=None):
-    """对单只股票打分，返回 (total, details_dict)"""
+    """对单只股票打分，返回 (total, details_dict, price, change_pct)"""
     details = {}
     total = 0
 
@@ -275,7 +275,8 @@ def score_holdings(holdings_data=None):
         # 持仓用当前信号级别(如果没有信号则用基础买)
         sig = h.get("signal_level", "基础买")
         total, details, price, change = score_stock(
-            code, name, sig, capital_flow=capital_flow, fundamental=fundamental
+            code, name, sig, key_levels=h.get("key_levels", {}),
+            capital_flow=capital_flow, fundamental=fundamental
         )
         cost = h.get("cost", 0)
         shares = h.get("shares", 0)
@@ -421,7 +422,8 @@ def cmd_recommend():
         name = item.get("name", "")
         sig = item.get("signal_level", item.get("signal", "基础买"))
         total, details, price, change = score_stock(
-            code, name, sig, capital_flow=capital_flow, fundamental=fundamental
+            code, name, sig, key_levels=item.get("key_levels"),
+            capital_flow=capital_flow, fundamental=fundamental
         )
         candidates.append({
             "code": code, "name": name, "score": total, "details": details,
@@ -571,7 +573,7 @@ def generate_recommendation(candidates, holdings, max_count=5):
 
 def _format_buy_recommendation(lines, stock):
     price = stock["price"]
-    stop_loss = round(price * 0.858, 2)  # -14.2%
+    stop_loss = round(price * 0.85, 2)  # -15%（与current_holdings三层止损对齐）
 
     lines.append(f"**TOP1: {stock['name']}({stock['code']}) 综合评分 {stock['score']}分**")
     lines.append("| 维度 | 得分 | 详情 |")
@@ -581,7 +583,7 @@ def _format_buy_recommendation(lines, stock):
     lines.append("")
     lines.append("📌 **推荐：新增买入**")
     lines.append(f"💰 现价{price:.2f} | 仓位20%（约2万）")
-    lines.append(f"📍 止损{stop_loss:.2f}（-14.2%）")
+    lines.append(f"📍 止损{stop_loss:.2f}（-15%）")
     lines.append("")
 
 
@@ -599,7 +601,7 @@ def _format_switch_recommendation(lines, new_stock, worst_stock):
         lines.append(f"| {dim} | {sc}/{max_sc} | {desc} |")
     lines.append("")
     price = new_stock["price"]
-    lines.append(f"💰 买入价{price:.2f} | 止损{price*0.858:.2f}（-14.2%）")
+    lines.append(f"💰 买入价{price:.2f} | 止损{price*0.85:.2f}（-15%）")
 
 
 # ── 更新持仓 ──────────────────────────────────────────────

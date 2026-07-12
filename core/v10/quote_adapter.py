@@ -576,6 +576,62 @@ def get_full_market_quotes(prefer_qmt=False):
     result = _tencent_full_market()
     return result
 
+def get_market_indices():
+    """
+    获取三大指数实时行情（上证/深证/创业板）
+    v3.2: 06-16新增，解决get_quote不支持指数代码的问题
+    get_quote('000001')会被当成sz000001(平安银行)，而非sh000001(上证指数)
+    所以指数必须用市场前缀sh/sz直接查腾讯API
+    返回: dict {'sh000001': {...}, 'sz399001': {...}, 'sz399006': {...}}
+    """
+    INDEX_CODES = {
+        'sh000001': '上证指数',
+        'sz399001': '深证成指',
+        'sz399006': '创业板指',
+    }
+    secids = list(INDEX_CODES.keys())
+    url = f"https://qt.gtimg.cn/q={','.join(secids)}"
+    result = {}
+    try:
+        req = Request(url, headers=HEADERS)
+        with urlopen(req, timeout=8) as resp:
+            text = resp.read().decode("gbk", errors="ignore")
+        for line in text.strip().split(";"):
+            if not line or "=" not in line:
+                continue
+            # 解析secid: v_sh000001 → sh000001
+            raw_key = line.split("=")[0]  # e.g. "v_sh000001"
+            secid = raw_key.split("_", 1)[-1] if "_" in raw_key else ""
+            if secid not in INDEX_CODES:
+                continue
+            val = line.split("=", 1)[1].strip('";\n')
+            if not val:
+                continue
+            fields = val.split("~")
+            if len(fields) < 50:
+                continue
+            try:
+                result[secid] = {
+                    "name": fields[1] if len(fields) > 1 else INDEX_CODES.get(secid, ""),
+                    "current_price": float(fields[3]) if fields[3] else 0,
+                    "prev_close": float(fields[4]) if fields[4] else 0,
+                    "open": float(fields[5]) if fields[5] else 0,
+                    "volume": float(fields[6]) if fields[6] else 0,
+                    "high": float(fields[33]) if fields[33] else 0,
+                    "low": float(fields[34]) if fields[34] else 0,
+                    "change": float(fields[31]) if fields[31] else 0,
+                    "change_pct": float(fields[32]) if fields[32] else 0,
+                    "amount": float(fields[37]) if fields[37] else 0,
+                    "amplitude": float(fields[43]) if len(fields) > 43 and fields[43] else 0,
+                    "source": "tencent_index",
+                }
+            except (ValueError, IndexError):
+                continue
+    except Exception as e:
+        import sys
+        print(f"[get_market_indices] error: {e}", file=sys.stderr)
+    return result
+
 def _tencent_full_market():
     """腾讯并发全量扫描（fallback）"""
     import concurrent.futures
@@ -586,7 +642,7 @@ def _tencent_full_market():
 
     def gen_pool():
         pool = []
-        for i in range(600000, 606000):
+        for i in range(600000, 610000):
             pool.append(f"sh{i}")
         for i in range(1, 4000):
             pool.append(f"sz{str(i).zfill(6)}")

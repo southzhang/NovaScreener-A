@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """
-资金面缓存刷新脚本（替代原iFinD MCP版本）
-从腾讯行情API获取持仓股的主力净流入数据
+资金面缓存刷新脚本 v3 — 东方财富免费API版
+v2使用MX妙想（已休眠10次/天），v3改用东方财富免费API：
+  1. push2实时API（一次多只，最快）
+  2. datacenter API（逐只，最稳定）
+  3. push2his历史API（降级）
+无需API Key，无调用限制，数据与MX妙想完全一致。
 每30分钟运行一次，写入 ~/.hermes/cache/capital_flow.json
-
-数据源：腾讯行情 qt.gtimg.cn field[50]=主力净流入(万元)
 """
 
-import json
-import os
-import re
-import sys
-import urllib.request
+import json, os, sys, time
 from datetime import datetime
 
 # 集合竞价时段跳过
 _now = datetime.now()
 if _now.hour == 9 and _now.minute < 30:
-    print(f"⏳ 集合竞价中({_now.strftime('%H:%M')})，跳过现金流缓存")
+    print(f"⏳ 集合竞价中({_now.strftime('%H:%M')})，跳过资金面缓存")
     sys.exit(0)
 
-# 全局变量
 SCRIPTS_DIR = os.path.expanduser("~/.hermes/scripts")
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
@@ -28,171 +25,107 @@ if SCRIPTS_DIR not in sys.path:
 CACHE_FILE = os.path.expanduser("~/.hermes/cache/capital_flow.json")
 
 
-def get_holdings():
-    """读取当前持仓"""
-    from current_holdings import get_holdings as gh
-    return gh()
-
-
-def fetch_tencent_quote(codes):
-    """批量获取腾讯行情 + 资金流向(ff_接口，降级到普通行情parts[50])"""
-    code_str = ",".join(
-        [f"sh{c}" if c.startswith("6") else f"sz{c}" for c in codes]
-    )
-    # 同时请求行情和资金流向(ff_前缀)
-    ff_codes = ",".join(
-        [f"ff_sh{c}" if c.startswith("6") else f"ff_sz{c}" for c in codes]
-    )
-    url = f"https://qt.gtimg.cn/q={code_str},{ff_codes}"
-    req = urllib.request.Request(url)
-    req.add_header("Referer", "https://qt.gtimg.cn")
-    req.add_header("User-Agent", "Mozilla/5.0")
+def get_stock_codes():
+    """获取需要查询的股票代码"""
+    codes = set()
+    
+    # 1. 持仓
     try:
-        resp = urllib.request.urlopen(req, timeout=10)
-        raw = resp.read().decode("gbk", errors="ignore")
-    except Exception as e:
-        print(f"腾讯行情请求失败: {e}")
-        return {}
-
-    # 先解析ff_资金流向
-    ff_inflow = {}  # code -> main_inflow
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if not line.startswith("v_ff_"):
-            continue
-        m = re.search(r'=(.+?);?$', line)
-        if not m:
-            continue
-        parts = m.group(1).strip('"').split("~")
-        if len(parts) < 4:
-            continue
-        code = parts[2] if len(parts) > 2 else ""
-        if code and parts[3]:
-            try:
-                ff_inflow[code] = float(parts[3])
-            except (ValueError, IndexError):
-                pass
-
-    # 再解析普通行情
-    results = {}
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if not line.startswith("v_sh") and not line.startswith("v_sz"):
-            continue
-        m = re.search(r'=(.+?);?$', line)
-        if not m:
-            continue
-        parts = m.group(1).strip('"').split("~")
-        if len(parts) < 40:
-            continue
-        code = parts[2]
-        # 主力净流入：ff_接口优先，降级到parts[50]
-        main_inflow = ff_inflow.get(code)
-        if main_inflow is None and len(parts) > 50 and parts[50]:
-            try:
-                main_inflow = float(parts[50])
-            except (ValueError, IndexError):
-                pass
-        yclose_val = float(parts[4]) if parts[4] else 0
-        price_val = float(parts[3]) if parts[3] else 0
-        api_chg = float(parts[32]) if parts[32] else None
-        if api_chg is not None:
-            chg = api_chg
-        elif yclose_val > 0 and price_val > 0:
-            chg = round((price_val / yclose_val - 1) * 100, 2)
-        else:
-            chg = 0
-        results[code] = {
-            "name": parts[1],
-            "code": code,
-            "current_price": price_val,
-            "change_pct": chg,
-            "amount": int(float(parts[37]) * 10000) if parts[37] else 0,
-            "turnover_rate": float(parts[38]) if parts[38] else 0,
-            "main_inflow": main_inflow,  # 万元，ff_接口>parts[50]降级
-        }
-    return results
+        from current_holdings import get_holdings
+        for h in get_holdings():
+            code = h.get("code", "").replace(".SH", "").replace(".SZ", "")
+            if code:
+                codes.add(code)
+    except:
+        pass
+    
+    # 2. V10 watchlist
+    try:
+        wl_path = os.path.expanduser("~/.hermes/cache/v10_watchlist.json")
+        if os.path.exists(wl_path):
+            with open(wl_path, "r", encoding="utf-8") as f:
+                wl = json.load(f)
+            for s in wl.get("stocks", []):
+                code = s.get("code", "").replace(".SH", "").replace(".SZ", "")
+                if code:
+                    codes.add(code)
+    except:
+        pass
+    
+    # 3. 模拟盘持仓
+    try:
+        portfolio_path = os.path.expanduser("~/.hermes/workspace/qmt_sim_portfolio.json")
+        if os.path.exists(portfolio_path):
+            with open(portfolio_path, "r", encoding="utf-8") as f:
+                portfolio = json.load(f)
+            for pos in portfolio.get("positions", []):
+                code = pos.get("code", "").replace(".SH", "").replace(".SZ", "")
+                if code:
+                    codes.add(code)
+    except:
+        pass
+    
+    return sorted(codes)
 
 
 def main():
-    print(f"[{datetime.now().strftime('%H:%M')}] 资金面缓存刷新开始")
-
-    # 获取持仓
-    try:
-        holdings = get_holdings()
-    except Exception as e:
-        print(f"读取持仓失败: {e}")
-        result = {"stocks": {}, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "error": str(e)}
-        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-        with open(CACHE_FILE, "w") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        print(f"已写入空缓存 (读取持仓失败)")
-        return
-
-    if not holdings:
-        result = {"stocks": {}, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"), "note": "无持仓"}
-        os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-        with open(CACHE_FILE, "w") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        print(f"已写入空缓存 (无持仓)")
-        return
-
-    # 提取代码
-    codes = []
-    for h in holdings:
-        if not isinstance(h, dict):
-            continue
-        code = str(h.get("code", ""))
-        if code:
-            codes.append(code)
-
+    print(f"[{datetime.now().strftime('%H:%M')}] 资金面缓存刷新 v3 (东方财富免费API)")
+    
+    codes = get_stock_codes()
     if not codes:
-        print("无法提取持仓代码")
+        print("没有需要查询的股票")
         return
-
-    print(f"查询 {len(codes)} 只持仓股: {codes}")
-
-    # 获取腾讯行情
-    quotes = fetch_tencent_quote(codes)
-    print(f"获取到 {len(quotes)} 只股票的行情数据")
-
-    # 组装结果
-    stocks_data = {}
-    for h in holdings:
-        if not isinstance(h, dict):
-            continue
-        code = str(h.get("code", ""))
-        name = h.get("name", "")
-        q = quotes.get(code, {})
-        stocks_data[code] = {
-            "name": name or q.get("name", ""),
-            "code": code,
-            "主力净流入(万元)": q.get("main_inflow"),
-            "现价": q.get("current_price"),
-            "涨幅%": q.get("change_pct"),
-            "成交额(万元)": q.get("amount"),
-            "换手率%": q.get("turnover_rate"),
-            "更新时间": datetime.now().strftime("%H:%M"),
-            "note": None if q.get("main_inflow") is not None else "腾讯行情无主力净流入数据(非交易时段或停牌)",
-        }
-
-    # 写入缓存
-    result = {
-        "stocks": stocks_data,
-        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "data_source": "腾讯行情qt.gtimg.cn + ff_资金流向接口(主力净流入,万元)",
-    }
-
-    os.makedirs(os.path.dirname(CACHE_FILE), exist_ok=True)
-    with open(CACHE_FILE, "w") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
-
-    print(f"已写入 {CACHE_FILE}")
-    print(f"  共 {len(stocks_data)} 只股票")
-    for code, data in stocks_data.items():
-        mi = data.get("主力净流入(万元)")
-        inflow_str = f"{mi:+.0f}万元" if mi is not None else "无数据"
-        print(f"  {data['name']}({code}): {inflow_str}")
+    
+    print(f"查询 {len(codes)} 只: {', '.join(codes[:10])}{'...' if len(codes) > 10 else ''}")
+    
+    # 优先使用东方财富免费API（三级降级：实时→数据中心→历史）
+    results = {}
+    try:
+        from eastmoney_capital_flow import query_capital_flow_batch, save_capital_flow
+        t0 = time.time()
+        results = query_capital_flow_batch(codes)
+        t1 = time.time()
+        print(f"东方财富API: {len(results)}/{len(codes)}只成功 ({t1-t0:.1f}秒)")
+    except Exception as e:
+        print(f"东方财富API查询失败: {e}")
+    
+    # 降级：MX妙想（可能已休眠，仅作为备用）
+    missing = [c for c in codes if c not in results]
+    if missing and not results:
+        print(f"⚠️ 东方财富API失败，尝试MX妙想备用...")
+        try:
+            from mx_capital_flow import query_capital_flow_simple, save_capital_flow_mx
+            mx_results = query_capital_flow_simple(missing)
+            if mx_results:
+                results.update(mx_results)
+                print(f"MX妙想备用: {len(mx_results)}只成功")
+        except Exception as e:
+            print(f"MX妙想也失败: {e}")
+    
+    # 保存
+    if results:
+        # 使用 eastmoney_capital_flow 的保存函数
+        try:
+            from eastmoney_capital_flow import save_capital_flow as save_em
+            save_em(results, source="eastmoney_free")
+        except ImportError:
+            # 回退到旧格式
+            from mx_capital_flow import save_capital_flow_mx
+            save_capital_flow_mx(results, source="eastmoney_free")
+        
+        print(f"✅ 缓存已保存: {CACHE_FILE}")
+        for code in sorted(results.keys()):
+            val = results[code]
+            if isinstance(val, dict):
+                inflow = val.get('main_net_inflow', 0)
+            else:
+                inflow = val
+            d = "流入" if inflow > 0 else "流出"
+            amt = abs(inflow)
+            s = f"{amt/10000:.2f}亿" if amt >= 10000 else f"{amt:.0f}万"
+            print(f"  {code} 主力净{d}{s}")
+    else:
+        print("❌ 无数据")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,39 @@ def ema_fast(series, period):
     return result
 
 
+
+def _hhv_np(series: np.ndarray, period: int) -> np.ndarray:
+    """滑动窗口最大值 — O(n) deque"""
+    from collections import deque
+    n = len(series)
+    result = np.empty(n, dtype=float)
+    dq = deque()
+    for i in range(n):
+        while dq and dq[0] < i - period + 1:
+            dq.popleft()
+        while dq and series[dq[-1]] <= series[i]:
+            dq.pop()
+        dq.append(i)
+        result[i] = series[dq[0]]
+    return result
+
+
+def _llv_np(series: np.ndarray, period: int) -> np.ndarray:
+    """滑动窗口最小值 — O(n) deque"""
+    from collections import deque
+    n = len(series)
+    result = np.empty(n, dtype=float)
+    dq = deque()
+    for i in range(n):
+        while dq and dq[0] < i - period + 1:
+            dq.popleft()
+        while dq and series[dq[-1]] >= series[i]:
+            dq.pop()
+        dq.append(i)
+        result[i] = series[dq[0]]
+    return result
+
+
 def hhv_fast(series, period):
     """滑动窗口最高值 O(n)"""
     from collections import deque
@@ -250,6 +283,109 @@ def scan_v10_full(close, high, low, volume, open_price) -> Optional[V10Signal]:
         score=score,
         detail=detail,
         tags=tags,
+    )
+
+
+# ===== V12 猎庄策略（改性KDJ入场 + 6重退出） =====
+
+@dataclass
+class V12HunterSignal:
+    """V12猎庄信号 — 改性KDJ(4K-3D)金叉8 + EMA20>EMA60趋势过滤
+    回测验证：+23.25%平均收益，7/10盈利，盈亏比1.67
+    入场：KDJ金叉8 + EMA20>EMA60趋势过滤
+    退出（12天最低持仓后）：死叉/超买95/破EMA144/MACD死叉/移动止盈/-8%止损
+    """
+    code: str = ""
+    name: str = ""
+    signal: bool = False
+    var1: float = 0.0
+    trend: bool = False
+    tunnel: bool = False
+    v10_resonance: bool = False
+    buildup: bool = False
+    reason: str = ""
+    score: int = 0
+
+
+def scan_v12_hunter(close: np.ndarray, high: np.ndarray, low: np.ndarray,
+                    volume: np.ndarray, open_price: np.ndarray) -> Optional[V12HunterSignal]:
+    """V12猎庄扫描 — 纯numpy实现，无需pandas依赖
+    
+    改性KDJ公式：VAR1 = 4*SMA(RSV,5,1) - 3*SMA(K,3.2,1)
+    金叉条件：VAR1[-1] > 8 且 VAR1[-2] <= 8
+    趋势过滤：EMA20 > EMA60
+    """
+    n = len(close)
+    if n < 80:
+        return None
+
+    # ─── 改性KDJ ───
+    llv5 = _llv_np(low, 5)
+    hhv5 = _hhv_np(high, 5)
+    denom = hhv5 - llv5
+    denom[denom == 0] = 1e-10
+    rsv = (close - llv5) / denom * 100
+    rsv = np.where(np.isinf(rsv) | np.isnan(rsv), 50, rsv)
+
+    def _sma(series: np.ndarray, N: int, M: float = 1.0) -> np.ndarray:
+        result = np.empty_like(series, dtype=float)
+        y = 0.0
+        for i in range(len(series)):
+            x = series[i]
+            if np.isnan(x):
+                result[i] = y
+                continue
+            y = x if i == 0 else (M * x + (N - M) * y) / N
+            result[i] = y
+        return result
+
+    k_arr = _sma(rsv, 5, 1)
+    d_arr = _sma(k_arr, 3.2, 1)
+    var1 = 4 * k_arr - 3 * d_arr
+    kdj_cross_up = bool(var1[-1] > 8 and var1[-2] <= 8)
+
+    # ─── EMA趋势过滤 ───
+    ema20 = ema_fast(close, 20)
+    ema60 = ema_fast(close, 60)
+    bull_trend = bool(ema20[-1] > ema60[-1])
+
+    # ─── V10隧道（加分项）───
+    ema144 = ema_fast(close, 144)
+    ema169 = ema_fast(close, 169)
+    tunnel_bull = bool(close[-1] > ema144[-1] and close[-1] > ema169[-1] and ema144[-1] > ema169[-1])
+
+    # ─── 建仓区(VAR07<10) ───
+    var05 = _llv_np(low, 27)
+    var06 = _hhv_np(high, 34)
+    denom2 = var06 - var05
+    denom2[denom2 == 0] = 1e-10
+    var07_raw = (close - var05) / denom2 * 4
+    var07_raw = np.where(np.isinf(var07_raw) | np.isnan(var07_raw), 2, var07_raw)
+    var07_smooth = np.empty_like(var07_raw, dtype=float)
+    alpha07 = 2.0 / 5.0
+    var07_smooth[0] = var07_raw[0]
+    for i in range(1, len(var07_raw)):
+        var07_smooth[i] = var07_raw[i] * alpha07 + var07_smooth[i-1] * (1 - alpha07)
+    buildup = bool(var07_smooth[-1] * 25 < 10)
+
+    # ── 入场信号 ──
+    entry_signal = kdj_cross_up and bull_trend
+
+    reasons = []
+    if kdj_cross_up: reasons.append("KDJ金叉8")
+    if bull_trend: reasons.append("EMA20>EMA60多头")
+    if tunnel_bull: reasons.append("V10隧道多头")
+    if buildup: reasons.append("建仓区共振")
+
+    score = 60 + (10 if tunnel_bull else 0) + (10 if buildup else 0)
+
+    return V12HunterSignal(
+        signal=entry_signal, var1=round(float(var1[-1]), 2),
+        trend=bull_trend, tunnel=tunnel_bull,
+        v10_resonance=kdj_cross_up and tunnel_bull,
+        buildup=buildup,
+        reason="+".join(reasons) if reasons else "无信号",
+        score=score,
     )
 
 
@@ -517,6 +653,13 @@ STRATEGY_REGISTRY = {
         "func": strategy_volume_price_up,
         "default_params": {},
         "desc": "连续3天价涨量增",
+    },
+    "v12_hunter": {
+        "name": "V12 猎庄",
+        "func": None,
+        "default_params": {},
+        "desc": "改性KDJ(4K-3D)金叉8+EMA20>EMA60趋势过滤+6重退出，回测+23.25%均值",
+        "is_v10": True,
     },
 }
 

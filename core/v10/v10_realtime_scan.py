@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 V10 盘中实时全扫描
-iFinD实时行情首选+腾讯备用，分钟K线盘中确认，重跑V10全量判断。
-每30分钟执行一次，捕捉盘中突发信号。
+wudao分钟K线盘中确认，重跑V10全量判断。
+每15分钟执行一次，捕捉盘中突发信号。
 
-流程：
-1. iFinD批量拉全市场实时行情（~5秒）+ 腾讯备用
+--
+1. 腾讯批量拉全市场实时行情（~5秒）
 2. 预过滤：去ST/停牌/跌停，保留有信号可能的票
 3. 10线程并行拉K线（~40秒）
 4. 追加"今日虚拟K线"到历史数据末尾
@@ -27,11 +27,8 @@ from datetime import datetime
 
 # 集合竞价时段(9:00-9:25)跳过，等9:30开盘有真实数据再跑
 now = datetime.now()
-if now.weekday() >= 5:
-    print(f"⏳ 周末({now.strftime('%A')})，跳过扫描")
-    sys.exit(0)
-if now.hour == 9 and now.minute < 30:
-    print(f"⏳ 集合竞价中({now.strftime('%H:%M')})，跳过扫描，等9:30开盘")
+if now.hour == 9 and now.minute < 25:
+    print(f"⏳ 集合竞价撮合前({now.strftime('%H:%M')})，跳过扫描")
     sys.exit(0)
 
 # 14:55之后停止扫描，保留尾盘时段数据（14:50那轮仍可捕捉尾盘信号）
@@ -41,6 +38,7 @@ if now.hour > 14 or (now.hour == 14 and now.minute >= 55):
 
 sys.path.insert(0, os.path.expanduser('~/.hermes/workspace'))
 sys.path.insert(0, os.path.expanduser("~/.hermes/scripts"))
+sys.path.insert(0, os.path.expanduser('~/projects/quant-watchdog/core/v10'))
 from v10_core import ema_fast, hhv_fast, llv_fast, barslast_fast
 from tech_analysis import vibe_score as _vibe_score_fn
 
@@ -55,122 +53,110 @@ try:
 except ImportError:
     _HAS_QUOTE_ADAPTER = False
 
-# iFinD HTTP API (分钟K线 + 基本面)
-# 统一使用 ifind_http_api.iFinDAPI 管理 token，避免双份token不一致
-IFIND_BASE_URL = "https://quantapi.51ifind.com/api/v1"
-IFIND_REFRESH_TOKEN = os.environ.get("IFIND_REFRESH_TOKEN", "")
-# 备用：从.env文件读取
-if not IFIND_REFRESH_TOKEN:
+# ====== wudao MCP (分钟K线，替代已过期的iFinD HTTP API) ======
+WUDAO_MCP_URL = "https://stock.quicktiny.cn/api/mcp"
+WUDAO_MCP_AUTH = None  # 从config.yaml延迟加载
+
+def _get_wudao_auth():
+    """从Hermes config.yaml读取wudao Authorization token"""
+    global WUDAO_MCP_AUTH
+    if WUDAO_MCP_AUTH:
+        return WUDAO_MCP_AUTH
     try:
-        _env_path = os.path.expanduser("~/.hermes/.env")
-        if os.path.exists(_env_path):
-            with open(_env_path) as _f:
-                for _line in _f:
-                    _line = _line.strip()
-                    if _line.startswith("IFIND_REFRESH_TOKEN="):
-                        IFIND_REFRESH_TOKEN = _line.split("=", 1)[1]
-                        break
-    except Exception:
-        pass
+        import re
+        cfg_path = os.path.expanduser("~/.hermes/config.yaml")
+        if os.path.exists(cfg_path):
+            with open(cfg_path) as f:
+                content = f.read()
+            m = re.search(r'Authorization:\s*Bearer\s+(\S+)', content)
+            if m:
+                WUDAO_MCP_AUTH = f"Bearer {m.group(1)}"
+                return WUDAO_MCP_AUTH
+    except Exception as e:
+        log(f"  ⚠️ 读取wudao认证失败: {e}")
+    return None
 
-# 统一使用 ifind_http_api.iFinDAPI 实例（自带token缓存+自动刷新+线程安全）
-try:
-    from ifind_http_api import iFinDAPI
-    _ifind_api = iFinDAPI(refresh_token=IFIND_REFRESH_TOKEN)
-    _HAS_IFIND = True
-except ImportError:
-    _ifind_api = None
-    _HAS_IFIND = False
-
-# iFinD API 需要自定义 SSL context（证书问题）
-_ifind_ctx = ssl.create_default_context()
-_ifind_ctx.check_hostname = False
-_ifind_ctx.verify_mode = ssl.CERT_NONE
-
-# ====== HTTP连接池（复用TCP连接，减少握手开销）======
-# 用于腾讯K线批量获取等高频请求，30线程×200只股票可省5-15秒
-import requests as _requests
-from requests.adapters import HTTPAdapter
-_http_session = _requests.Session()
-_http_session.mount('https://', HTTPAdapter(pool_connections=10, pool_maxsize=30))
-_http_session.headers.update({'User-Agent': 'Mozilla/5.0'})
-
-# ====== V10 参数（与strategies.py scan_v10_full 对齐）======
+# ====== V10 参数（与v10_scan_strict.py一致 + v2增强）======
 参数_放量 = 1.5
 参数_强庄 = 3
-参数_通道宽度 = 0.008  # 0.8%，与strategies.py一致（旧值0.015过严，漏掉0.8%-1.5%的信号）
+# 通道宽度动态化：低价股要求更宽，高价股要求更窄
+# 原参数_通道宽度 = 0.015（固定1.5%），改为按价格分段
+
+# SSL context（腾讯行情请求需要绕过证书校验）
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
 def log(msg):
     print(msg, flush=True)
 
 
-# ====== iFinD Token管理（委托给 ifind_http_api.iFinDAPI）======
-def _get_ifind_token():
-    """获取iFinD access_token（通过iFinDAPI实例自动管理缓存+刷新）"""
-    if not _ifind_api or not IFIND_REFRESH_TOKEN:
-        return None
-    try:
-        if _ifind_api._refresh_access_token():
-            return _ifind_api.access_token
-    except Exception as e:
-        log(f"  ⚠️ iFinD token刷新失败: {e}")
-    return None
-
-
-def _ifind_post(endpoint, params, timeout=30):
-    """iFinD API通用POST（委托给iFinDAPI实例，统一token管理）"""
-    if not _ifind_api:
-        log(f"  ⚠️ iFinD不可用，跳过{endpoint}")
-        return None
-    try:
-        return _ifind_api._post(endpoint, params, timeout=timeout)
-    except Exception as e:
-        log(f"  ⚠️ iFinD请求失败 {endpoint}: {e}")
-        return None
-
-
-# ====== iFinD 分钟K线 ======
+# ====== wudao分钟K线（替代已过期的iFinD HTTP API）======
 def fetch_minute_klines_today(code):
     """
-    获取今日分钟K线（iFinD HTTP API）
-    code: 纯数字代码，如 "600756"
+    获取今日分钟K线（wudao MCP minute_data）
+    code: 纯数字代码，如 "600584"
     返回: dict with open/high/low/close/volume arrays, or None
     """
-    # 转换代码格式: 600756 → 600756.SH
-    suffix = ".SH" if code.startswith('6') else ".SZ"
-    ifind_code = f"{code}{suffix}"
-
-    now = datetime.now()
-    date_str = now.strftime('%Y-%m-%d')
-    start_time = f"{date_str} 09:30:00"
-    end_time = f"{date_str} {now.strftime('%H:%M:%S')}"
-
-    data = _ifind_post("high_frequency", {
-        "codes": ifind_code,
-        "indicators": "open,high,low,close,volume",
-        "starttime": start_time,
-        "endtime": end_time
-    }, timeout=15)
-
-    if not data or 'tables' not in data or not data.get('tables'):
-        log(f"  ⚠️ iFinD分钟K线无数据: {code}")
+    auth = _get_wudao_auth()
+    if not auth:
+        log(f"  ⚠️ wudao认证不可用，跳过分钟K线: {code}")
         return None
-
     try:
-        table = data['tables'][0]
-        inner = table.get('table', table)
+        resp = requests.post(
+            WUDAO_MCP_URL,
+            headers={
+                'Authorization': auth,
+                'Content-Type': 'application/json',
+            },
+            json={
+                'jsonrpc': '2.0',
+                'id': 1,
+                'method': 'tools/call',
+                'params': {
+                    'name': 'minute_data',
+                    'arguments': {
+                        'code': code,
+                        'format': 'json'
+                    }
+                }
+            },
+            timeout=15
+        )
+        resp.raise_for_status()
+        data = resp.json()
 
-        opens = inner.get('open', [])
-        highs = inner.get('high', [])
-        lows = inner.get('low', [])
-        closes = inner.get('close', [])
-        volumes = inner.get('volume', [])
-
-        if not closes or len(closes) < 5:
+        # 解析MCP响应
+        result = data.get('result', {})
+        content = result.get('content', [])
+        if not content:
             return None
 
-        return {
+        # 提取text字段
+        text = content[0].get('text', '') if isinstance(content, list) and content else ''
+        if not text:
+            return None
+
+        minute_data = json.loads(text)
+        if not minute_data.get('success'):
+            return None
+
+        points = minute_data.get('data', {}).get('points', [])
+        if not points or len(points) < 5:
+            return None
+
+        # 转换为numpy数组格式（兼容原有calc_intraday_indicators）
+        opens = [float(p['open']) for p in points if p.get('open')]
+        highs = [float(p['high']) for p in points if p.get('high')]
+        lows = [float(p['low']) for p in points if p.get('low')]
+        closes = [float(p.get('close', p.get('price', 0))) for p in points]
+        volumes = [float(p['volume']) for p in points if p.get('volume')]
+
+        if len(closes) < 5:
+            return None
+
+        result = {
             'open': np.array(opens, dtype=float),
             'high': np.array(highs, dtype=float),
             'low': np.array(lows, dtype=float),
@@ -178,7 +164,14 @@ def fetch_minute_klines_today(code):
             'volume': np.array(volumes, dtype=float),
             'count': len(closes),
         }
-    except Exception:
+        # 附加VWAP（wudao直接提供average字段）
+        averages = [float(p['average']) for p in points if p.get('average')]
+        if averages:
+            result['vwap'] = averages[-1]  # 最新均价
+        return result
+
+    except Exception as e:
+        log(f"  ⚠️ wudao分钟K线异常({code}): {e}")
         return None
 
 
@@ -376,12 +369,16 @@ def _filter_stocks(stocks):
         name = s.get('name', '')
         if 'ST' in name or '退' in name or name.startswith('N'):
             continue
-        # iFinD不返回名称时，通过涨跌幅限制间接判断ST（ST股涨跌±5%）
-        if name == s.get('code', '') and abs(s['change']) > 9.5 and s['change'] != 0:
-            # 非ST股涨跌停是10%，如果只涨了5%左右且是涨跌停，可能是ST
-            pass  # 这个判断不准确，跳过
-        if s['change'] < -9.5:
-            continue
+        # 注：腾讯批量行情通常返回名称，ST股通过上面 'ST' in name 已过滤
+        # 名称缺失时无法判断ST，保留该股票（宁可多扫不漏）
+        # 涨跌幅过滤：创业板±20%限制，主板±10%限制
+        code = s.get('code', '')
+        if code.startswith('300'):
+            if s['change'] < -19.5:  # 创业板跌停-20%
+                continue
+        else:
+            if s['change'] < -9.5:  # 主板跌停-10%
+                continue
         if s['volume'] <= 0:
             continue
         if s['amount'] < 500:
@@ -397,49 +394,27 @@ def prefilter_stocks(stocks):
     目标：从4290只筛到~500-1000只，K线扫描时间大幅缩短
     
     优先使用问财接口（更精准），失败时降级为本地过滤
+    注意：iFinD HTTP API已过期(06-15)，问财预过滤使用wudao MCP或本地降级
     """
-    # ====== 首选：问财智能选股 ======
-    token = _get_ifind_token()
-    if token:
-        try:
-            t0 = time.time()
-            # 问财查询：成交额>1.5亿 + 换手率>2% + 股价5-150 + 非ST
-            # 涨跌幅条件由_filter_stocks统一处理（排除跌停<-9.5%）
-            query = "成交额大于1.5亿 换手率大于2% 股价5元到150元 非ST 非北交所"
-            data = _ifind_post("smart_stock_picking", {
-                "searchstring": query,
-                "searchtype": "stock"
-            }, timeout=30)
-            
-            if data and data.get('errorcode') == 0 and data.get('tables'):
-                table = data['tables'][0].get('table', {})
-                codes_raw = table.get('股票代码', [])
-                names_raw = table.get('股票简称', [])
-                
-                # 提取纯数字代码
-                wc_codes = set()
-                for c in codes_raw:
-                    code = str(c).split('.')[0]
-                    if code and code.isdigit():
-                        wc_codes.add(code)
-                
-                if wc_codes:
-                    # 用问财结果过滤原始列表
-                    result = [s for s in stocks if s['code'] in wc_codes]
-                    t1 = time.time()
-                    log(f"  ✅ 问财预过滤: {len(stocks)}只 → {len(result)}只 ({t1-t0:.2f}秒)")
-                    return result
-        except Exception as e:
-            log(f"  ⚠️ 问财接口异常: {e}，降级为本地过滤")
+    # ====== 首选：问财智能选股（通过iFinD HTTP API，已过期）======
+    # iFinD HTTP API token已过期，直接跳过
+    # TODO: 可改用wudao MCP stock_screener替代，但本地过滤已足够稳定
     
-    # ====== 降级：本地简单过滤（与问财条件一致）======
+    # ====== 本地简单过滤（与问财条件一致）======
     result = []
     for s in stocks:
         change = s.get('change', 0)
         amount = s.get('amount', 0)
         price = s.get('price', 0)
-        if change > 9.8:
-            continue
+        # 涨幅过滤：创业板20%限制，主板10%限制
+        # 创业板(300xxx)涨幅可达+20%，不能按9.8%过滤，否则漏掉创业板强势股
+        code = s.get('code', '')
+        if code.startswith('300'):
+            if change > 19.8:  # 创业板涨停+20%
+                continue
+        else:
+            if change > 9.8:  # 主板涨停+10%
+                continue
         if amount < 15000:
             continue
         if price < 5 or price > 150:
@@ -454,7 +429,7 @@ def prefilter_stocks(stocks):
 
 
 def _safe_float(val, default=0):
-    """安全提取数值（处理iFinD返回的列表/标量混合格式）"""
+    """安全提取数值（处理列表/标量混合格式）"""
     if isinstance(val, list):
         val = val[0] if val else default
     try:
@@ -475,7 +450,7 @@ def fetch_all_realtime():
     t_start = time.time()
     
     tc_codes = []
-    for i in range(600000, 606000):
+    for i in range(600000, 610000):
         tc_codes.append(f"sh{i:06d}")
     for i in range(1, 4000):
         tc_codes.append(f"sz{i:06d}")
@@ -574,8 +549,9 @@ def fetch_klines(code, count=250):
     secid = f"sh{code}" if code.startswith('6') else f"sz{code}"
     url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={secid},day,,,{count},qfq"
     try:
-        resp = _http_session.get(url, timeout=8, verify=False)
-        raw = resp.text
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        resp = urllib.request.urlopen(req, timeout=8, context=_ssl_ctx)
+        raw = resp.read().decode('utf-8')
         # _var格式: kline_dayqfq={...json...}
         json_str = raw.split('=', 1)[1] if '=' in raw else raw
         data = json.loads(json_str)
@@ -588,7 +564,6 @@ def fetch_klines(code, count=250):
                 'high': np.array([float(b[3]) for b in bars]),
                 'low': np.array([float(b[4]) for b in bars]),
                 'volume': np.array([float(b[5]) for b in bars]),
-                'last_date': bars[-1][0] if bars[-1] else '',
             }
     except Exception:
         pass
@@ -630,7 +605,7 @@ def batch_prefetch_klines(codes):
     t0 = time.time()
 
     # ====== 腾讯30线程并发（最快）======
-    log(f"  📡 腾讯K线批量获取({len(codes)}只, 20线程)...")
+    log(f"  📡 腾讯K线批量获取({len(codes)}只, 30线程)...")
     _tencent_fill_klines(codes)
     t1 = time.time()
     tc_count = len(_kline_cache)
@@ -696,7 +671,7 @@ def batch_prefetch_klines(codes):
 
 
 def _tencent_fill_klines(codes):
-    """腾讯逐只获取K线，填入缓存（20线程并发，降低WAF风险）"""
+    """腾讯逐只获取K线，填入缓存（30线程并发）"""
     _lock = threading.Lock()
 
     def _fetch_one(code):
@@ -705,7 +680,7 @@ def _tencent_fill_klines(codes):
             with _lock:
                 _kline_cache[code] = data
 
-    with ThreadPoolExecutor(max_workers=20) as executor:
+    with ThreadPoolExecutor(max_workers=30) as executor:
         futures = {executor.submit(_fetch_one, c): c for c in codes}
         done = 0
         for f in as_completed(futures):
@@ -715,15 +690,14 @@ def _tencent_fill_klines(codes):
 
 
 def _fetch_klines_tencent(code, count=250):
-    """纯腾讯K线获取（不尝试QMT，用于批量预取的腾讯降级路径）
-    使用模块级requests.Session连接池复用TCP连接。
-    """
+    """纯腾讯K线获取（不尝试QMT，用于批量预取的腾讯降级路径）"""
     # 腾讯K线：ifzq.gtimg.cn（web.ifzq已501被WAF封，2026-06起改用裸域名+_var参数）
     secid = f"sh{code}" if code.startswith('6') else f"sz{code}"
     url = f"https://ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param={secid},day,,,{count},qfq"
     try:
-        resp = _http_session.get(url, timeout=8, verify=False)
-        raw = resp.text
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        resp = urllib.request.urlopen(req, timeout=8, context=_ssl_ctx)
+        raw = resp.read().decode('utf-8')
         # _var格式: kline_dayqfq={...json...}
         json_str = raw.split('=', 1)[1] if '=' in raw else raw
         data = json.loads(json_str)
@@ -737,7 +711,6 @@ def _fetch_klines_tencent(code, count=250):
             'high': np.array([float(b[3]) for b in bars]),
             'low': np.array([float(b[4]) for b in bars]),
             'volume': np.array([float(b[5]) for b in bars]),
-            'last_date': bars[-1][0] if bars[-1] else '',
         }
     except Exception:
         return None
@@ -746,7 +719,15 @@ def _fetch_klines_tencent(code, count=250):
 # ====== Step 3: V10 扫描（带今日虚拟K线）======
 
 def scan_stock_rt(close, high, low, volume, open_price):
-    """V10扫描（与v10_scan_strict.py逻辑一致）"""
+    """V10扫描（v2增强版）
+    增强：
+    1. 放量质量：阳线放量才有效，阴线放量减分
+    2. 量比趋势：连续3日放量趋势加分
+    3. 高位信号标注：距EMA20>15%标记position_warning
+    4. STRONG信号20日HHV限制：距20日最高>10%时不触发强庄
+    5. QW放宽：QW上升 OR RSV<30（超卖区域不要求QW上升）
+    6. 通道宽度动态化：按价格分段
+    """
     n = len(close)
     if n < 200:
         return None
@@ -769,6 +750,15 @@ def scan_stock_rt(close, high, low, volume, open_price):
         K[i] = K[i-1] * 2/3 + RSV[i] / 3
     QW = ema_fast(K, 3)
 
+    # 通道宽度动态化：低价股要求更宽，高价股要求更窄
+    price_now = close[-1]
+    if price_now < 20:
+        参数_通道宽度 = 0.03   # 低价股3%
+    elif price_now < 50:
+        参数_通道宽度 = 0.02   # 中价股2%
+    else:
+        参数_通道宽度 = 0.015  # 高价股1.5%
+
     通道间距 = np.where(MA20 > 0, (MA5 - MA20) / MA20, 0.0)
     kernel = np.ones(5) / 5
     VOL_MA5 = np.convolve(volume, kernel, mode='full')[:n]
@@ -785,16 +775,43 @@ def scan_stock_rt(close, high, low, volume, open_price):
     i = n - 1
     隧道多头 = close[i] > 隧道快[i] and close[i] > 隧道慢[i] and 隧道快[i] > 隧道慢[i]
     双线定式 = MA5[i] > MA20[i] and MA5[i] > MA5[i-1]
+    # QW放宽：QW上升 OR RSV<30（超卖区域不要求QW上升，允许回调买点）
     QW上升 = QW[i] > QW[i-1]
+    RSV超卖 = RSV[i] < 30
+    QW_OK = QW上升 or RSV超卖
     宽度OK = 通道间距[i] > 参数_通道宽度
     阳线 = close[i] > open_price[i]
     放量 = volume[i] > 参数_放量 * VOL_MA5[i] if VOL_MA5[i] > 0 else False
+
+    # 放量质量：阳线放量才有效，阴线放量减分
+    放量质量 = 0
+    if 放量:
+        if 阳线:
+            放量质量 = 1  # 阳线放量=好
+        else:
+            放量质量 = -1  # 阴线放量=坏
+
+    # 量比趋势：连续3日放量趋势
+    量比趋势 = 0
+    if n >= 5 and VOL_MA5[i] > 0:
+        vol_3d = np.mean(volume[i-2:i+1]) if i >= 2 else volume[i]
+        vol_5d = VOL_MA5[i]
+        if vol_5d > 0:
+            量比趋势 = vol_3d / vol_5d
+
     MACD金叉 = DIF[i] > DEA[i] and DIF[i-1] <= DEA[i-1]
 
-    ST_FIRST = STRONG[i] and barslast_STRONG[i-1] >= 参数_强庄
-    强庄信号 = 放量 and 阳线 and ST_FIRST
+    # STRONG信号20日HHV限制：距20日最高>10%时不触发强庄（防追高）
+    高20 = float(np.max(high[-20:])) if n >= 20 else float(np.max(high))
+    距高20 = (close[i] - 高20) / 高20 * 100 if 高20 > 0 else 0
+    强庄可触发 = True
+    if 距高20 > 10:
+        强庄可触发 = False  # 距20日最高>10%，不触发强庄
 
-    基础买 = 隧道多头 and 双线定式 and QW上升 and 宽度OK and 阳线 and 放量
+    ST_FIRST = STRONG[i] and barslast_STRONG[i-1] >= 参数_强庄
+    强庄信号 = 放量 and 阳线 and ST_FIRST and 强庄可触发
+
+    基础买 = 隧道多头 and 双线定式 and QW_OK and 宽度OK and 阳线 and 放量
     全买入 = 基础买 and 强庄信号 and MACD金叉
     强庄买 = 基础买 and 强庄信号
     MACD加分 = DIF[i] > DEA[i]
@@ -816,11 +833,28 @@ def scan_stock_rt(close, high, low, volume, open_price):
     l30 = float(np.min(low[-30:]))
     stop_loss = max(ema200, l30)
 
+    # 高位信号标注
+    position_warning = ''
+    dist_ema7 = abs(close[i] - ema7) / ema7 * 100 if ema7 > 0 else 0
+    dist_ema20 = abs(close[i] - ema20_val) / ema20_val * 100 if ema20_val > 0 else 0
+    if dist_ema20 > 15:
+        position_warning = f'距EMA20 {dist_ema20:.1f}%高位'
+    elif dist_ema7 > 8:
+        position_warning = f'距EMA7 {dist_ema7:.1f}%偏高'
+
+    # 放量质量标注
+    vol_quality_tag = ''
+    if 放量质量 < 0:
+        vol_quality_tag = '阴线放量⚠️'
+    elif 量比趋势 > 1.3:
+        vol_quality_tag = '连续放量✅'
+
     return {
         'signals': signals,
         'full_buy': 全买入,
         'strong_buy': 强庄买,
         'base_buy': 基础买,
+        'macd_plus': MACD加分,
         'key_levels': {
             'ema7': round(float(ema7), 3),
             'ema20': round(float(ema20_val), 3),
@@ -830,6 +864,11 @@ def scan_stock_rt(close, high, low, volume, open_price):
             'low_30d': round(l30, 3),
             'stop_loss': round(stop_loss, 3),
         },
+        'position_warning': position_warning,
+        'vol_quality': vol_quality_tag,
+        'vol_trend': round(量比趋势, 2) if 量比趋势 else 0,
+        'dist_ema7': round(dist_ema7, 1),
+        'dist_ema20': round(dist_ema20, 1),
     }
 
 
@@ -860,9 +899,6 @@ def _scan_one_rt(stock):
     # 06-12: 腾讯K线WAF封禁时走QMT补缺，QMT K线可能缺今日数据
     # 检测方法：如果最后一根K线的收盘价==最高价==最低价（盘中虚拟K线特征不明显）
     # 更可靠：用stock的实时行情数据追加今日虚拟K线
-    # 检查K线最后一天是否为今天，如果不是则追加今日虚拟K线
-    # 旧版用2%涨跌阈值判断，涨跌<2%时漏拼今日数据导致信号滞后
-    # 新版用K线日期精确判断，无日期时回退到2%阈值
     if stock and len(close_ext) > 0:
         rt_price = stock.get('price', 0)
         rt_open = stock.get('open', 0)
@@ -870,48 +906,20 @@ def _scan_one_rt(stock):
         rt_low = stock.get('low', 0)
         rt_vol = stock.get('volume', 0)
         last_close = float(close_ext[-1])
-        last_date = kdata.get('last_date', '')
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        # 优先用日期判断：K线最后一天不是今天 → 追加虚拟K线
-        need_append = False
-        if last_date and not last_date.startswith(today_str):
-            need_append = True
-        elif not last_date:
-            # 无日期信息时回退到2%阈值（QMT补缺的K线无日期）
-            if rt_price > 0 and abs(rt_price - last_close) / last_close > 0.02:
-                need_append = True
-        if need_append and rt_price > 0:
-            # 休市日防护：实时行情OHLC与最后一条K线一致→不拼
-            if (abs(last_close - rt_price) < 0.001 and
-                rt_high > 0 and abs(float(close_ext[-1]) - rt_price) < 0.001):
-                pass  # 休市日缓存数据，不追加
-            else:
-                # 盘中成交量按交易进度外推全天量，避免V10放量条件被低估
-                est_vol = rt_vol if rt_vol > 0 else 0
-                now_t = datetime.now()
-                if rt_vol > 0 and now_t.weekday() < 5:
-                    _min = now_t.hour * 60 + now_t.minute
-                    if 570 <= _min < 900:
-                        if _min <= 690:       # 9:30-11:30
-                            progress = max(0.01, (_min - 570) / 240.0)
-                        elif _min < 780:       # 11:30-13:00 午休
-                            progress = 0.5
-                        else:                  # 13:00-15:00
-                            progress = max(0.01, 0.5 + (_min - 780) / 240.0)
-                        if 0.01 < progress < 0.99:
-                            est_vol = rt_vol / progress * 1.10
-                # 追加今日虚拟K线
-                close_ext = np.append(close_ext, rt_price)
-                high_ext = np.append(high_ext, rt_high if rt_high > 0 else rt_price)
-                low_ext = np.append(low_ext, rt_low if rt_low > 0 else rt_price)
-                vol_ext = np.append(vol_ext, est_vol if est_vol > 0 else 0)
-                open_ext = np.append(open_ext, rt_open if rt_open > 0 else rt_price)
+        # 如果实时价格与最后一根K线收盘价差距>2%，说明K线不是今天的
+        if rt_price > 0 and abs(rt_price - last_close) / last_close > 0.02:
+            # 追加今日虚拟K线
+            close_ext = np.append(close_ext, rt_price)
+            high_ext = np.append(high_ext, rt_high if rt_high > 0 else rt_price)
+            low_ext = np.append(low_ext, rt_low if rt_low > 0 else rt_price)
+            vol_ext = np.append(vol_ext, rt_vol if rt_vol > 0 else 0)
+            open_ext = np.append(open_ext, rt_open if rt_open > 0 else rt_price)
 
     result = scan_stock_rt(close_ext, high_ext, low_ext, vol_ext, open_ext)
     if result is None or not result['signals']:
         return None
 
-    # iFinD分钟K线盘中确认
+    # wudao分钟K线盘中确认
     minute_data = fetch_minute_klines_today(code)
     intraday = calc_intraday_indicators(minute_data)
     confirmed, conf_score, conf_notes = intraday_confirmation(result, intraday)
@@ -931,6 +939,29 @@ def _scan_one_rt(stock):
     except Exception as e:
         log(f"  ⚠️ Vibe评分异常({code}): {e}")
 
+    # 趋势质量评分（仅V10信号触发的票才计算）
+    trend_quality = {'score': 0, 'grade': 'D', 'stars': '⛔', 'recommend': ''}
+    try:
+        from trend_quality import TrendQuality
+        tq = TrendQuality()
+        # 用已有K线数据构建DataFrame，避免重复API调用
+        import pandas as pd
+        n_klines = len(close_ext)
+        if n_klines >= 60:
+            # 构造日期索引（从最后一天倒推）
+            from datetime import datetime, timedelta
+            dates = [datetime.now() - timedelta(days=n_klines - i) for i in range(n_klines)]
+            # 过滤掉非交易日（简单近似，周末和假期的日期不影响EMA计算）
+            df = pd.DataFrame({
+                'close': close_ext.astype(float),
+                'high': high_ext.astype(float),
+                'low': low_ext.astype(float),
+                'volume': vol_ext.astype(float),
+            }, index=pd.DatetimeIndex(dates))
+            trend_quality = tq.score(df)
+    except Exception as e:
+        log(f"  ⚠️ 趋势质量评分异常({code}): {e}")
+
     return {
         'code': code,
         'name': stock['name'],
@@ -946,6 +977,10 @@ def _scan_one_rt(stock):
         'intraday_ok': confirmed.get('intraday_ok', False) if confirmed else False,
         'vibe_score': vibe_result.get('score', 0),
         'vibe_tags': vibe_result.get('tags', []),
+        'trend_quality_score': trend_quality.get('score', 0),
+        'trend_quality_grade': trend_quality.get('grade', 'D'),
+        'trend_quality_stars': trend_quality.get('stars', '⛔'),
+        'trend_quality_recommend': trend_quality.get('recommend', ''),
     }
 
 
@@ -953,10 +988,12 @@ def _scan_one_rt(stock):
 
 def main():
     # 交易时间检查 — 非交易时间直接退出
+    # A股交易: 9:15-9:25竞价, 9:30-11:30上午, 13:00-15:00下午
+    # 午休(11:31-12:59)保留上午数据仍可扫描，只是行情不更新
     now = datetime.now()
     h, m = now.hour, now.minute
     t = h * 100 + m
-    if not ((915 <= t <= 925) or (930 <= t <= 1130) or (1300 <= t <= 1500)):
+    if not ((915 <= t <= 925) or (930 <= t <= 1500)):
         return
 
     time_str = now.strftime('%H:%M:%S')
@@ -991,7 +1028,7 @@ def main():
     log(f"  K线缓存: {cache_hit}/{len(prefiltered_codes)}只")
 
     # [4/5] V10扫描（K线已预取，扫描阶段直接查缓存 + iFinD分钟K线确认）
-    log(f"\n[4/5] V10实时扫描（⚡30线程 + iFinD分钟K线确认）...")
+    log(f"\n[4/5] V10实时扫描（⚡30线程 + wudao分钟K线确认）...")
     log(f"  K线缓存命中率: {cache_hit}/{len(prefiltered_codes)} ({cache_hit/max(len(prefiltered_codes),1)*100:.0f}%)")
     results = []
     errors = 0
@@ -1020,6 +1057,42 @@ def main():
     t3 = time.time()
     log(f"\n[5/5] 扫描完成: {len(prefiltered)}只 | 耗时{t3-t1:.1f}秒 | 命中{len(results)}只 | 错误{errors}只")
 
+    # ====== 资金面前置筛选 ======
+    # A股跟着资金走：主力净流出的V10信号票不进watchlist，从源头过滤
+    cf_filtered = 0
+    cf_data = {}
+    try:
+        cf_path = os.path.expanduser('~/.hermes/cache/capital_flow.json')
+        if os.path.exists(cf_path):
+            with open(cf_path, 'r', encoding='utf-8') as f:
+                cf_raw = json.load(f)
+            for k, v in cf_raw.items():
+                if isinstance(v, dict):
+                    cf_data[k] = v
+                elif isinstance(v, (int, float)):
+                    cf_data[k] = {'main_net_inflow': v}
+    except Exception as e:
+        log(f"  ⚠️ 资金面缓存加载失败: {e}")
+
+    if cf_data:
+        before = len(results)
+        filtered_results = []
+        for r in results:
+            code = r['code']
+            cf = cf_data.get(code, {})
+            cf_inflow = cf.get('main_net_inflow', 0) if isinstance(cf, dict) else 0
+            # 保存资金面到结果（供盯盘/尾盘使用）
+            r['capital_flow'] = cf_inflow
+            r['capital_flow_detail'] = cf if isinstance(cf, dict) else {}
+            # 主力净流出>2000万 → 不进watchlist
+            if isinstance(cf_inflow, (int, float)) and cf_inflow < -2000:
+                cf_filtered += 1
+                continue
+            filtered_results.append(r)
+        results = filtered_results
+        if cf_filtered > 0:
+            log(f"  💰 资金面前置筛选: 过滤{cf_filtered}只主力净流出>2000万, 保留{len(results)}只")
+
     # [4/4] 输出结果
     if results:
         # Vibe排序: 按Vibe得分降序
@@ -1039,8 +1112,14 @@ def main():
             for r in full_buy:
                 intra_tag = f" | 盘中{r['intraday_confidence']}分✅" if r.get('intraday_ok') else f" | 盘中{r['intraday_confidence']}分⚠️" if r.get('intraday_notes', '') != '无分钟数据' else ""
                 vibe_tag = f" | Vibe:{r.get('vibe_score',0):+d}({' '.join(r.get('vibe_tags',[])[:3])})" if r.get('vibe_tags') else ""
+                tq_grade = r.get('trend_quality_grade', 'D')
+                tq_score = r.get('trend_quality_score', 0)
+                tq_stars = r.get('trend_quality_stars', '⛔')
+                tq_tag = f" | 趋势{tq_grade}({tq_score:.0f}分){tq_stars}"
                 limit_tag = f" 涨停{r.get('limit_up',0):.2f}/跌停{r.get('limit_down',0):.2f}" if r.get('limit_up') else ""
-                log(f"  {r['name']}({r['code']}) ¥{r['price']:.2f} {r['change']:+.1f}%{limit_tag} | 成交{r['amount']:.0f}万 | {r['signal']}{intra_tag}{vibe_tag}")
+                pos_warn = f" | ⚠️{r['position_warning']}" if r.get('position_warning') else ""
+                vol_q = f" | {r['vol_quality']}" if r.get('vol_quality') else ""
+                log(f"  {r['name']}({r['code']}) ¥{r['price']:.2f} {r['change']:+.1f}%{limit_tag} | 成交{r['amount']:.0f}万 | {r['signal']}{intra_tag}{vibe_tag}{tq_tag}{pos_warn}{vol_q}")
                 if r.get('intraday_notes', '') != '无分钟数据':
                     log(f"    📊 {r['intraday_notes']}")
 
@@ -1049,8 +1128,14 @@ def main():
             for r in strong_buy:
                 intra_tag = f" | 盘中{r['intraday_confidence']}分✅" if r.get('intraday_ok') else f" | 盘中{r['intraday_confidence']}分⚠️" if r.get('intraday_notes', '') != '无分钟数据' else ""
                 vibe_tag = f" | Vibe:{r.get('vibe_score',0):+d}({' '.join(r.get('vibe_tags',[])[:3])})" if r.get('vibe_tags') else ""
+                tq_grade = r.get('trend_quality_grade', 'D')
+                tq_score = r.get('trend_quality_score', 0)
+                tq_stars = r.get('trend_quality_stars', '⛔')
+                tq_tag = f" | 趋势{tq_grade}({tq_score:.0f}分){tq_stars}"
                 limit_tag = f" 涨停{r.get('limit_up',0):.2f}/跌停{r.get('limit_down',0):.2f}" if r.get('limit_up') else ""
-                log(f"  {r['name']}({r['code']}) ¥{r['price']:.2f} {r['change']:+.1f}%{limit_tag} | 成交{r['amount']:.0f}万 | {r['signal']}{intra_tag}{vibe_tag}")
+                pos_warn = f" | ⚠️{r['position_warning']}" if r.get('position_warning') else ""
+                vol_q = f" | {r['vol_quality']}" if r.get('vol_quality') else ""
+                log(f"  {r['name']}({r['code']}) ¥{r['price']:.2f} {r['change']:+.1f}%{limit_tag} | 成交{r['amount']:.0f}万 | {r['signal']}{intra_tag}{vibe_tag}{tq_tag}{pos_warn}{vol_q}")
                 if r.get('intraday_notes', '') != '无分钟数据':
                     log(f"    📊 {r['intraday_notes']}")
 
@@ -1059,8 +1144,14 @@ def main():
             for r in base_buy:
                 intra_tag = f" | 盘中{r['intraday_confidence']}分✅" if r.get('intraday_ok') else f" | 盘中{r['intraday_confidence']}分⚠️" if r.get('intraday_notes', '') != '无分钟数据' else ""
                 vibe_tag = f" | Vibe:{r.get('vibe_score',0):+d}({' '.join(r.get('vibe_tags',[])[:3])})" if r.get('vibe_tags') else ""
+                tq_grade = r.get('trend_quality_grade', 'D')
+                tq_score = r.get('trend_quality_score', 0)
+                tq_stars = r.get('trend_quality_stars', '⛔')
+                tq_tag = f" | 趋势{tq_grade}({tq_score:.0f}分){tq_stars}"
                 limit_tag = f" 涨停{r.get('limit_up',0):.2f}/跌停{r.get('limit_down',0):.2f}" if r.get('limit_up') else ""
-                log(f"  {r['name']}({r['code']}) ¥{r['price']:.2f} {r['change']:+.1f}%{limit_tag} | 成交{r['amount']:.0f}万 | {r['signal']}{intra_tag}{vibe_tag}")
+                pos_warn = f" | ⚠️{r['position_warning']}" if r.get('position_warning') else ""
+                vol_q = f" | {r['vol_quality']}" if r.get('vol_quality') else ""
+                log(f"  {r['name']}({r['code']}) ¥{r['price']:.2f} {r['change']:+.1f}%{limit_tag} | 成交{r['amount']:.0f}万 | {r['signal']}{intra_tag}{vibe_tag}{tq_tag}{pos_warn}{vol_q}")
                 if r.get('intraday_notes', '') != '无分钟数据':
                     log(f"    📊 {r['intraday_notes']}")
 
@@ -1078,12 +1169,32 @@ def main():
                 'key_levels': r['key_levels'],
                 'vibe_score': r.get('vibe_score', 0),
                 'vibe_tags': r.get('vibe_tags', []),
+                'trend_quality_score': r.get('trend_quality_score', 0),
+                'trend_quality_grade': r.get('trend_quality_grade', 'D'),
+                'trend_quality_stars': r.get('trend_quality_stars', '⛔'),
+                'trend_quality_recommend': r.get('trend_quality_recommend', ''),
                 'scan_date': date_str,
             }
             if r.get('intraday_notes', '') != '无分钟数据':
                 wl_item['intraday_notes'] = r['intraday_notes']
                 wl_item['intraday_confidence'] = r['intraday_confidence']
                 wl_item['intraday_ok'] = r['intraday_ok']
+            # 资金面数据（供盯盘/尾盘使用）
+            if r.get('capital_flow') is not None:
+                wl_item['capital_flow'] = r['capital_flow']
+            if r.get('capital_flow_detail'):
+                wl_item['capital_flow_detail'] = r['capital_flow_detail']
+            # V10 v2增强字段
+            if r.get('position_warning'):
+                wl_item['position_warning'] = r['position_warning']
+            if r.get('vol_quality'):
+                wl_item['vol_quality'] = r['vol_quality']
+            if r.get('vol_trend'):
+                wl_item['vol_trend'] = r['vol_trend']
+            if r.get('dist_ema7') is not None:
+                wl_item['dist_ema7'] = r['dist_ema7']
+            if r.get('dist_ema20') is not None:
+                wl_item['dist_ema20'] = r['dist_ema20']
             watchlist.append(wl_item)
 
         # 保存观察池
