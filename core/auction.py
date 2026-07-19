@@ -627,6 +627,7 @@ def _exclude_st(name: str) -> bool:
 
 
 def run_auction_scan(progress_callback=None) -> dict:
+    global _USE_QUOTE_ADAPTER
     """
     运行竞价选股扫描 v2
     返回: {stocks: [AuctionStock], sector_heat: {}, stats: {}}
